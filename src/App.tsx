@@ -1,17 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  LayoutDashboard,
-  Package,
-  ClipboardList,
-  CalendarClock,
-  Wrench,
-  UserCheck,
-  Users,
-  UserCog,
-  LogOut,
+  LayoutGrid,
   Monitor,
+  ArrowLeftRight,
+  CalendarDays,
+  Wrench,
+  User,
+  Check,
+  FileText,
+  UserCog,
   Menu,
   X,
+  GraduationCap,
+  Shield,
 } from 'lucide-react';
 import {
   ApiError,
@@ -33,6 +34,7 @@ import { SchedulesTab } from './components/SchedulesTab';
 import { MaintenancesTab } from './components/MaintenancesTab';
 import { AttendancesTab } from './components/AttendancesTab';
 import { UsersTab } from './components/UsersTab';
+import { ReportsTab } from './components/ReportsTab';
 import { ProfileTab } from './components/ProfileTab';
 
 type TabKey =
@@ -41,8 +43,9 @@ type TabKey =
   | 'loans'
   | 'schedules'
   | 'maintenances'
-  | 'attendances'
   | 'users'
+  | 'attendances'
+  | 'reports'
   | 'profile';
 
 const EMPTY_SNAPSHOT: AppDataSnapshot = {
@@ -53,6 +56,27 @@ const EMPTY_SNAPSHOT: AppDataSnapshot = {
   attendances: [],
   users: [],
 };
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'Admin',
+  teknisi: 'Teknisi',
+  guru: 'Guru',
+  siswa: 'Siswa',
+  pengguna: 'Pengguna',
+};
+
+function formatIndonesianDate(date: Date): string {
+  try {
+    return new Intl.DateTimeFormat('id-ID', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    }).format(date);
+  } catch {
+    return date.toLocaleDateString('id-ID');
+  }
+}
 
 export function App() {
   const [booting, setBooting] = useState(true);
@@ -219,12 +243,12 @@ export function App() {
 
   if (booting) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-200 flex items-center justify-center">
+      <div className="min-h-screen bg-[#0f213a] text-slate-200 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 animate-pulse">
+          <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-white animate-pulse">
             <Monitor className="w-5 h-5" />
           </div>
-          <p className="text-sm text-slate-400">Memuat SIPALAK...</p>
+          <p className="text-sm text-slate-300">Memuat SIPALAK...</p>
         </div>
       </div>
     );
@@ -242,76 +266,124 @@ export function App() {
 
   const isAdmin = profile.role === 'admin';
 
-  const navItems: { key: TabKey; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean }[] = [
-    { key: 'overview', label: 'Beranda', icon: LayoutDashboard },
-    { key: 'assets', label: 'Inventaris & QR', icon: Package },
-    { key: 'loans', label: 'Peminjaman', icon: ClipboardList },
-    { key: 'schedules', label: 'Jadwal Lab', icon: CalendarClock },
-    { key: 'maintenances', label: 'Perawatan', icon: Wrench },
-    { key: 'attendances', label: 'Absensi Lab', icon: UserCheck },
-    { key: 'users', label: 'Pengguna', icon: Users, adminOnly: true },
-    { key: 'profile', label: 'Profil Saya', icon: UserCog },
+  type NavItem = {
+    key: TabKey;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    adminOnly?: boolean;
+  };
+
+  const navGroups: { title: string; items: NavItem[] }[] = [
+    {
+      title: 'RINGKASAN',
+      items: [{ key: 'overview', label: 'Dashboard', icon: LayoutGrid }],
+    },
+    {
+      title: 'MANAJEMEN LAB',
+      items: [
+        { key: 'assets', label: 'Inventaris', icon: Monitor },
+        { key: 'loans', label: 'Peminjaman', icon: ArrowLeftRight },
+        { key: 'schedules', label: 'Jadwal Lab', icon: CalendarDays },
+        { key: 'maintenances', label: 'Maintenance', icon: Wrench },
+        { key: 'users', label: 'Pengguna', icon: User, adminOnly: true },
+      ],
+    },
+    {
+      title: 'ADMINISTRASI',
+      items: [
+        { key: 'attendances', label: 'Absensi', icon: Check },
+        { key: 'reports', label: 'Laporan', icon: FileText },
+        { key: 'profile', label: 'Profil Saya', icon: UserCog },
+      ],
+    },
   ];
 
-  const visibleNav = navItems.filter((item) => !item.adminOnly || isAdmin);
+  const allItems = navGroups.flatMap((g) => g.items);
+  const currentTitle = allItems.find((i) => i.key === activeTab)?.label ?? 'Dashboard';
 
   const selectTab = (key: TabKey) => {
     setActiveTab(key);
     setMobileNavOpen(false);
   };
 
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex">
-      {/* Desktop Sidebar */}
-      <aside className="hidden lg:flex lg:w-64 lg:flex-col bg-slate-900 text-slate-100 border-r border-slate-800 shrink-0">
-        <div className="px-5 py-5 border-b border-slate-800 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white">
-            <Monitor className="w-5 h-5" />
-          </div>
+  const formattedDate = formatIndonesianDate(new Date());
+  const roleLabel = ROLE_LABELS[profile.role] ?? profile.role;
+
+  const renderSidebarBody = (onClose?: () => void) => (
+    <div className="flex flex-col h-full bg-[#0f213a] text-slate-200">
+      <div className="px-5 pt-5 pb-4 border-b border-white/10">
+        <div className="flex items-start justify-between gap-2">
           <div>
-            <div className="font-bold text-base leading-tight">SIPALAK</div>
-            <div className="text-[11px] text-slate-400">SMKN 1 Sambeng</div>
-          </div>
-        </div>
-
-        <nav className="flex-1 p-3 space-y-1">
-          {visibleNav.map((item) => {
-            const Icon = item.icon;
-            const active = activeTab === item.key;
-            return (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => selectTab(item.key)}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
-                  active
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                }`}
-              >
-                <Icon className="w-4 h-4 shrink-0" />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-
-        <div className="p-4 border-t border-slate-800">
-          <div className="mb-3 px-1">
-            <div className="text-sm font-semibold text-white truncate">{profile.displayName}</div>
-            <div className="text-xs text-slate-400 truncate">
-              @{profile.username} • <span className="capitalize">{profile.role}</span>
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300">
+                <Shield className="w-4 h-4" />
+              </div>
+              <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-300">
+                <GraduationCap className="w-4 h-4" />
+              </div>
             </div>
+            <div className="text-xl font-extrabold italic tracking-tight text-white leading-none">
+              SIPALAK
+            </div>
+            <p className="text-[11px] text-slate-300 mt-1.5 leading-snug">
+              Sistem Pelayanan Laboratorium Komputer
+            </p>
+            <p className="text-[11px] text-slate-400 leading-snug">SMK Negeri 1 Sambeng</p>
           </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer"
-          >
-            <LogOut className="w-4 h-4" />
-            Keluar
-          </button>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white lg:hidden cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
+      </div>
+
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+        {navGroups.map((group) => {
+          const items = group.items.filter((item) => !item.adminOnly || isAdmin);
+          if (items.length === 0) return null;
+          return (
+            <div key={group.title}>
+              <div className="px-3 mb-2 text-[10px] font-semibold tracking-wider text-slate-400 uppercase">
+                {group.title}
+              </div>
+              <div className="space-y-1">
+                {items.map((item) => {
+                  const Icon = item.icon;
+                  const active = activeTab === item.key;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => selectTab(item.key)}
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                        active
+                          ? 'bg-[#273d5c] text-white'
+                          : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4 shrink-0 opacity-85" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </nav>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[#f8fafc] text-slate-900 flex">
+      {/* Desktop Sidebar */}
+      <aside className="hidden lg:block lg:w-[250px] shrink-0 border-r border-slate-800/40">
+        <div className="sticky top-0 h-screen">{renderSidebarBody()}</div>
       </aside>
 
       {/* Mobile Drawer */}
@@ -321,65 +393,63 @@ export function App() {
             className="fixed inset-0 bg-slate-900/60"
             onClick={() => setMobileNavOpen(false)}
           />
-          <aside className="relative w-64 max-w-[80vw] bg-slate-900 text-slate-100 flex flex-col z-10">
-            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
-              <span className="font-bold">SIPALAK</span>
-              <button
-                type="button"
-                onClick={() => setMobileNavOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <nav className="flex-1 p-3 space-y-1">
-              {visibleNav.map((item) => {
-                const Icon = item.icon;
-                const active = activeTab === item.key;
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => selectTab(item.key)}
-                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium ${
-                      active ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800'
-                    }`}
-                  >
-                    <Icon className="w-4 h-4" />
-                    {item.label}
-                  </button>
-                );
-              })}
-            </nav>
-            <div className="p-4 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-semibold"
-              >
-                <LogOut className="w-4 h-4" />
-                Keluar
-              </button>
-            </div>
+          <aside className="relative w-64 max-w-[82vw] z-10 h-full">
+            {renderSidebarBody(() => setMobileNavOpen(false))}
           </aside>
         </div>
       )}
 
-      {/* Main Content */}
+      {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="lg:hidden bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30">
-          <button
-            type="button"
-            onClick={() => setMobileNavOpen(true)}
-            className="p-2 rounded-lg text-slate-600 hover:bg-slate-100"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
-          <span className="font-bold text-slate-900">SIPALAK</span>
-          <span className="text-xs font-medium text-slate-500 capitalize">{profile.role}</span>
+        <header className="bg-white border-b border-slate-200/80 px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between gap-4 sticky top-0 z-30">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-100 cursor-pointer"
+              aria-label="Buka navigasi"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="min-w-0">
+              <div className="text-xs text-slate-500 truncate">
+                Sistem Informasi / {currentTitle}
+              </div>
+              <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight truncate">
+                {currentTitle}
+              </h1>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-end text-right shrink-0">
+            <div className="hidden sm:block text-xs text-slate-500">
+              <span className="font-medium text-slate-700">
+                {profile.unit || 'Lab Komputer Akuntansi'}
+              </span>
+              <span className="mx-1.5 text-slate-300">·</span>
+              <span>{formattedDate}</span>
+            </div>
+            <div className="flex items-center gap-2.5 mt-0.5">
+              <button
+                type="button"
+                onClick={() => selectTab('profile')}
+                className="text-xs text-slate-600 hover:text-slate-900 transition-colors cursor-pointer truncate max-w-[180px] sm:max-w-none"
+                title="Buka Profil Saya"
+              >
+                {profile.displayName} · {roleLabel}
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="px-3 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Keluar
+              </button>
+            </div>
+          </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1200px] w-full mx-auto">
           {activeTab === 'overview' && (
             <OverviewTab data={data} profile={profile} onNavigate={selectTab} />
           )}
@@ -437,6 +507,7 @@ export function App() {
               onNotify={notify}
             />
           )}
+          {activeTab === 'reports' && <ReportsTab data={data} />}
           {activeTab === 'profile' && (
             <ProfileTab
               profile={profile}
@@ -450,6 +521,13 @@ export function App() {
             />
           )}
         </main>
+
+        <footer className="py-4 px-6 text-center text-xs text-slate-400">
+          SIPALAK · Sistem Pelayanan Laboratorium Komputer ·{' '}
+          {getBackendMode() === 'local'
+            ? 'Data tersimpan pada browser perangkat ini'
+            : 'Sinkronisasi server aktif'}
+        </footer>
       </div>
 
       {toast && (
