@@ -182,23 +182,29 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     <div className="min-h-screen sipalak-auth-bg flex items-center justify-center p-4">
       <div className="w-full max-w-[400px] bg-white rounded-2xl shadow-2xl border border-slate-200/80 p-7 sm:p-8 text-slate-900">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3.5">
             {branding.logoDataUrl && (
               <img
                 src={branding.logoDataUrl}
                 alt={branding.appName}
-                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-200 p-1 shrink-0"
+                className="w-16 h-16 rounded-xl object-contain bg-slate-50 border border-slate-200 p-1.5 shrink-0"
               />
             )}
-            <h1 className="text-[22px] font-extrabold tracking-tight text-[#1a2b4c] leading-none">
-              {branding.appName}
-            </h1>
+            <div className="min-w-0">
+              <h1 className="text-[20px] font-extrabold tracking-tight text-[#1a2b4c] leading-tight">
+                {branding.appName}
+              </h1>
+              <p className="text-[12px] text-slate-500 mt-0.5 leading-snug">
+                {branding.appSubtitle}
+              </p>
+              <p className="text-[12px] font-medium text-slate-600 leading-snug">
+                {branding.schoolName}
+              </p>
+            </div>
           </div>
           <h2 className="text-[19px] font-bold text-slate-900 mt-4 leading-snug">
             {headingTitle}
           </h2>
-          <p className="text-[13px] text-slate-500 mt-1.5 leading-snug">{branding.appSubtitle}</p>
-          <p className="text-[13px] text-slate-500 leading-snug">{branding.schoolName}</p>
         </div>
 
         {error && (
@@ -504,7 +510,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               </button>
             </form>
 
-            <div className="mt-5 rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 space-y-2 text-xs text-slate-600">
+            <div className="mt-5 rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 text-xs text-slate-600">
               <div className="flex items-center justify-between text-[11px] text-slate-500">
                 <span>Belum punya akun pengguna?</span>
                 <button
@@ -518,9 +524,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   Daftar di sini
                 </button>
               </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed border-t border-slate-200/70 pt-2">
-                Semua data tersimpan permanen di Cloud Firestore dan tersinkronisasi lintas perangkat.
-              </p>
             </div>
           </>
         )}
