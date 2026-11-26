@@ -1,4 +1,4 @@
-import type { AppDataSnapshot, UserPrivateInfo, UserProfile } from '../types';
+import type { AppDataSnapshot, BrandingSettings, UserPrivateInfo, UserProfile } from '../types';
 import { handleLocalApiRequest } from './localBackend';
 
 const TOKEN_STORAGE_KEY = 'sipalak_session_token';
@@ -209,4 +209,13 @@ export const authApi = {
       { method: 'PUT', body: JSON.stringify(payload) }
     ),
   fetchSnapshot: () => apiFetch<AppDataSnapshot>('/api/data'),
+};
+
+export const brandingApi = {
+  get: () => apiFetch<BrandingSettings>('/api/settings/branding', {}, null),
+  update: (payload: BrandingSettings) =>
+    apiFetch<BrandingSettings>('/api/settings/branding', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
 };

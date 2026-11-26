@@ -4,14 +4,17 @@ import { apiFetch } from '../lib/api';
 import {
   ASSET_CATEGORIES,
   ASSET_CONDITIONS,
+  DEFAULT_BRANDING,
   type Asset,
   type AssetCategory,
   type AssetCondition,
+  type BrandingSettings,
 } from '../types';
 import { AssetQrModal } from './AssetQrModal';
 
 interface AssetsTabProps {
   assets: Asset[];
+  branding?: BrandingSettings;
   isAdmin: boolean;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
@@ -31,6 +34,7 @@ const emptyForm = {
 
 export const AssetsTab: React.FC<AssetsTabProps> = ({
   assets,
+  branding = DEFAULT_BRANDING,
   isAdmin,
   onRefresh,
   onNotify,
@@ -451,7 +455,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
         </div>
       )}
 
-      <AssetQrModal asset={qrAsset} onClose={() => setQrAsset(null)} />
+      <AssetQrModal asset={qrAsset} branding={branding} onClose={() => setQrAsset(null)} />
     </div>
   );
 };

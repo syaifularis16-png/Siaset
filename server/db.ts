@@ -114,7 +114,60 @@ db.exec(`
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
+
+export interface BrandingSettings {
+  appName: string;
+  appSubtitle: string;
+  schoolName: string;
+}
+
+const DEFAULT_BRANDING: BrandingSettings = {
+  appName: 'SIPALAK',
+  appSubtitle: 'Sistem Pelayanan Laboratorium Komputer',
+  schoolName: 'SMK Negeri 1 Sambeng',
+};
+
+export function getBrandingSettings(): BrandingSettings {
+  const row = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get('branding') as { value?: string } | undefined;
+  if (!row?.value) return { ...DEFAULT_BRANDING };
+  try {
+    const parsed = JSON.parse(row.value) as Partial<BrandingSettings>;
+    return {
+      appName: typeof parsed.appName === 'string' && parsed.appName.trim() ? parsed.appName.trim() : DEFAULT_BRANDING.appName,
+      appSubtitle:
+        typeof parsed.appSubtitle === 'string' && parsed.appSubtitle.trim()
+          ? parsed.appSubtitle.trim()
+          : DEFAULT_BRANDING.appSubtitle,
+      schoolName:
+        typeof parsed.schoolName === 'string' && parsed.schoolName.trim()
+          ? parsed.schoolName.trim()
+          : DEFAULT_BRANDING.schoolName,
+    };
+  } catch {
+    return { ...DEFAULT_BRANDING };
+  }
+}
+
+export function saveBrandingSettings(next: BrandingSettings): BrandingSettings {
+  const normalized: BrandingSettings = {
+    appName: next.appName.trim() || DEFAULT_BRANDING.appName,
+    appSubtitle: next.appSubtitle.trim() || DEFAULT_BRANDING.appSubtitle,
+    schoolName: next.schoolName.trim() || DEFAULT_BRANDING.schoolName,
+  };
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES ('branding', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(JSON.stringify(normalized));
+  return normalized;
+}
 
 export interface DbUserRow {
   uid: string;

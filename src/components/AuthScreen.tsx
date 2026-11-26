@@ -1,15 +1,18 @@
 import React, { useState } from 'react';
 import { Monitor, Lock, User, Mail, Building2, ShieldCheck, ArrowRight } from 'lucide-react';
 import { authApi, type AuthSessionResponse } from '../lib/api';
+import { DEFAULT_BRANDING, type BrandingSettings } from '../types';
 
 interface AuthScreenProps {
   needsSetup: boolean;
+  branding?: BrandingSettings;
   initialNotice?: string | null;
   onAuthenticated: (res: AuthSessionResponse) => void;
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   needsSetup,
+  branding = DEFAULT_BRANDING,
   initialNotice,
   onAuthenticated,
 }) => {
@@ -69,14 +72,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               <Monitor className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight text-white">SIPALAK</h1>
-              <p className="text-xs text-slate-400">SMK Negeri 1 Sambeng</p>
+              <h1 className="text-xl font-bold tracking-tight text-white">{branding.appName}</h1>
+              <p className="text-xs text-slate-400">{branding.schoolName}</p>
             </div>
           </div>
           <p className="text-sm text-slate-300">
             {needsSetup
               ? 'Pengaturan Awal: Buat akun Administrator laboratorium untuk memulai.'
-              : 'Sistem Pelayanan Laboratorium Komputer — Masuk dengan akun Anda.'}
+              : `${branding.appSubtitle} — Masuk dengan akun Anda.`}
           </p>
         </div>
 

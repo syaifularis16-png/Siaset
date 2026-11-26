@@ -1,18 +1,20 @@
-import type {
-  Asset,
-  AssetCategory,
-  AssetCondition,
-  Attendance,
-  LabSchedule,
-  Loan,
-  LoanStatus,
-  Maintenance,
-  MaintenanceStatus,
-  PersonRole,
-  ScheduleStatus,
-  SystemRole,
-  UserPrivateInfo,
-  UserProfile,
+import {
+  DEFAULT_BRANDING,
+  type Asset,
+  type AssetCategory,
+  type AssetCondition,
+  type Attendance,
+  type BrandingSettings,
+  type LabSchedule,
+  type Loan,
+  type LoanStatus,
+  type Maintenance,
+  type MaintenanceStatus,
+  type PersonRole,
+  type ScheduleStatus,
+  type SystemRole,
+  type UserPrivateInfo,
+  type UserProfile,
 } from '../types';
 
 const STORAGE_KEY = 'sipalak_local_db_v1';
@@ -41,6 +43,7 @@ interface StoredSession {
 }
 
 interface LocalDbState {
+  branding: BrandingSettings;
   users: StoredUser[];
   sessions: StoredSession[];
   assets: Asset[];
@@ -87,7 +90,22 @@ function readDb(): LocalDbState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<LocalDbState>;
+      const rawBrand = parsed.branding;
       return {
+        branding: {
+          appName:
+            typeof rawBrand?.appName === 'string' && rawBrand.appName.trim()
+              ? rawBrand.appName.trim()
+              : DEFAULT_BRANDING.appName,
+          appSubtitle:
+            typeof rawBrand?.appSubtitle === 'string' && rawBrand.appSubtitle.trim()
+              ? rawBrand.appSubtitle.trim()
+              : DEFAULT_BRANDING.appSubtitle,
+          schoolName:
+            typeof rawBrand?.schoolName === 'string' && rawBrand.schoolName.trim()
+              ? rawBrand.schoolName.trim()
+              : DEFAULT_BRANDING.schoolName,
+        },
         users: Array.isArray(parsed.users) ? parsed.users : [],
         sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
         assets: Array.isArray(parsed.assets) ? parsed.assets : [],
@@ -101,6 +119,7 @@ function readDb(): LocalDbState {
     // Ignore parse errors and return empty state
   }
   return {
+    branding: { ...DEFAULT_BRANDING },
     users: [],
     sessions: [],
     assets: [],
@@ -248,6 +267,25 @@ export async function handleLocalApiRequest<T>(
   const state = readDb();
   const nowIso = new Date().toISOString();
   const m = method.toUpperCase();
+
+  // --- BRANDING ---
+  if (path === '/api/settings/branding' && m === 'GET') {
+    return state.branding as T;
+  }
+
+  if (path === '/api/settings/branding' && m === 'PUT') {
+    const current = requireLocalAuth(state, token);
+    requireLocalAdmin(current);
+    const appName = clampStr(body.appName, 40);
+    const appSubtitle = clampStr(body.appSubtitle, 120);
+    const schoolName = clampStr(body.schoolName, 100);
+    if (!appName || !appSubtitle || !schoolName) {
+      throw localHttpError('Nama aplikasi, subjudul, dan nama instansi wajib diisi.', 400);
+    }
+    state.branding = { appName, appSubtitle, schoolName };
+    writeDb(state, 'branding');
+    return state.branding as T;
+  }
 
   // --- AUTH ---
   if (path === '/api/auth/bootstrap-status' && m === 'GET') {

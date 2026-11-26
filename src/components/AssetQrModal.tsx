@@ -1,14 +1,19 @@
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Printer, X } from 'lucide-react';
-import type { Asset } from '../types';
+import { DEFAULT_BRANDING, type Asset, type BrandingSettings } from '../types';
 
 interface AssetQrModalProps {
   asset: Asset | null;
+  branding?: BrandingSettings;
   onClose: () => void;
 }
 
-export const AssetQrModal: React.FC<AssetQrModalProps> = ({ asset, onClose }) => {
+export const AssetQrModal: React.FC<AssetQrModalProps> = ({
+  asset,
+  branding = DEFAULT_BRANDING,
+  onClose,
+}) => {
   if (!asset) return null;
 
   const qrPayload = JSON.stringify({
@@ -25,7 +30,9 @@ export const AssetQrModal: React.FC<AssetQrModalProps> = ({ asset, onClose }) =>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <div>
             <h3 className="font-semibold text-slate-900">Detail & Label QR Aset</h3>
-            <p className="text-xs text-slate-500">SIPALAK · SMK Negeri 1 Sambeng</p>
+            <p className="text-xs text-slate-500">
+              {branding.appName} · {branding.schoolName}
+            </p>
           </div>
           <button
             type="button"

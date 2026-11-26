@@ -13,10 +13,12 @@ import {
   X,
   GraduationCap,
   Shield,
+  Pencil,
 } from 'lucide-react';
 import {
   ApiError,
   authApi,
+  brandingApi,
   getBackendMode,
   getStoredToken,
   getWsUrl,
@@ -25,7 +27,13 @@ import {
   type AuthSessionResponse,
 } from './lib/api';
 import { subscribeLocalSync } from './lib/localBackend';
-import type { AppDataSnapshot, UserPrivateInfo, UserProfile } from './types';
+import {
+  DEFAULT_BRANDING,
+  type AppDataSnapshot,
+  type BrandingSettings,
+  type UserPrivateInfo,
+  type UserProfile,
+} from './types';
 import { AuthScreen } from './components/AuthScreen';
 import { OverviewTab } from './components/OverviewTab';
 import { AssetsTab } from './components/AssetsTab';
@@ -36,6 +44,7 @@ import { AttendancesTab } from './components/AttendancesTab';
 import { UsersTab } from './components/UsersTab';
 import { ReportsTab } from './components/ReportsTab';
 import { ProfileTab } from './components/ProfileTab';
+import { BrandingModal } from './components/BrandingModal';
 
 type TabKey =
   | 'overview'
@@ -86,9 +95,15 @@ export function App() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [privateInfo, setPrivateInfo] = useState<UserPrivateInfo | null>(null);
   const [data, setData] = useState<AppDataSnapshot>(EMPTY_SNAPSHOT);
+  const [branding, setBranding] = useState<BrandingSettings>(DEFAULT_BRANDING);
+  const [brandingModalOpen, setBrandingModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  useEffect(() => {
+    document.title = `${branding.appName} — ${branding.appSubtitle}`;
+  }, [branding]);
 
   const notify = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -99,6 +114,15 @@ export function App() {
     const timer = setTimeout(() => setToast(null), 3500);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  const refreshBranding = useCallback(async () => {
+    try {
+      const next = await brandingApi.get();
+      setBranding(next);
+    } catch {
+      // Keep current branding on transient failure
+    }
+  }, []);
 
   const refreshSnapshot = useCallback(async () => {
     const snapshot = await authApi.fetchSnapshot();
@@ -120,6 +144,7 @@ export function App() {
     async function init() {
       setBooting(true);
       await probeBackend(true);
+      void refreshBranding();
       const existingToken = getStoredToken();
       if (existingToken) {
         try {
@@ -169,6 +194,7 @@ export function App() {
 
     if (getBackendMode() === 'local') {
       return subscribeLocalSync(() => {
+        void refreshBranding();
         void refreshSnapshot().catch(() => {
           // Ignore transient refresh failure
         });
@@ -188,11 +214,15 @@ export function App() {
 
       ws.onmessage = (event) => {
         try {
-          const msg = JSON.parse(String(event.data)) as { type?: string };
+          const msg = JSON.parse(String(event.data)) as { type?: string; scope?: string };
           if (msg.type === 'sync') {
-            void refreshSnapshot().catch(() => {
-              // Ignore transient refresh failure
-            });
+            if (msg.scope === 'branding') {
+              void refreshBranding();
+            } else {
+              void refreshSnapshot().catch(() => {
+                // Ignore transient refresh failure
+              });
+            }
           } else if (msg.type === 'force-logout') {
             clearSession('Sesi Anda telah dinonaktifkan oleh Administrator.');
           }
@@ -215,7 +245,7 @@ export function App() {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       ws?.close();
     };
-  }, [token, profile, refreshSnapshot, clearSession]);
+  }, [token, profile, refreshBranding, refreshSnapshot, clearSession]);
 
   const handleAuthenticated = async (res: AuthSessionResponse) => {
     setStoredToken(res.token);
@@ -258,6 +288,7 @@ export function App() {
     return (
       <AuthScreen
         needsSetup={needsSetup}
+        branding={branding}
         initialNotice={authNotice}
         onAuthenticated={handleAuthenticated}
       />
@@ -323,12 +354,23 @@ export function App() {
               </div>
             </div>
             <div className="text-xl font-extrabold italic tracking-tight text-white leading-none">
-              SIPALAK
+              {branding.appName}
             </div>
             <p className="text-[11px] text-slate-300 mt-1.5 leading-snug">
-              Sistem Pelayanan Laboratorium Komputer
+              {branding.appSubtitle}
             </p>
-            <p className="text-[11px] text-slate-400 leading-snug">SMK Negeri 1 Sambeng</p>
+            <p className="text-[11px] text-slate-400 leading-snug">{branding.schoolName}</p>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setBrandingModalOpen(true)}
+                className="mt-2.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-medium text-slate-200 transition-colors cursor-pointer"
+                title="Ubah nama aplikasi, layanan, dan nama sekolah"
+              >
+                <Pencil className="w-3 h-3" />
+                Ubah Identitas
+              </button>
+            )}
           </div>
           {onClose && (
             <button
@@ -456,6 +498,7 @@ export function App() {
           {activeTab === 'assets' && (
             <AssetsTab
               assets={data.assets}
+              branding={branding}
               isAdmin={isAdmin}
               onRefresh={refreshSnapshot}
               onNotify={notify}
@@ -523,12 +566,20 @@ export function App() {
         </main>
 
         <footer className="py-4 px-6 text-center text-xs text-slate-400">
-          SIPALAK · Sistem Pelayanan Laboratorium Komputer ·{' '}
+          {branding.appName} · {branding.appSubtitle} ·{' '}
           {getBackendMode() === 'local'
             ? 'Data tersimpan pada browser perangkat ini'
             : 'Sinkronisasi server aktif'}
         </footer>
       </div>
+
+      <BrandingModal
+        open={brandingModalOpen}
+        branding={branding}
+        onClose={() => setBrandingModalOpen(false)}
+        onSaved={setBranding}
+        onNotify={notify}
+      />
 
       {toast && (
         <div className="fixed bottom-5 right-5 z-50">

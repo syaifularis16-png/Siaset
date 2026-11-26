@@ -1,3 +1,15 @@
+export interface BrandingSettings {
+  appName: string;
+  appSubtitle: string;
+  schoolName: string;
+}
+
+export const DEFAULT_BRANDING: BrandingSettings = {
+  appName: 'SIPALAK',
+  appSubtitle: 'Sistem Pelayanan Laboratorium Komputer',
+  schoolName: 'SMK Negeri 1 Sambeng',
+};
+
 export type SystemRole = 'admin' | 'teknisi' | 'guru' | 'siswa' | 'pengguna';
 export type PersonRole = 'Guru' | 'Siswa' | 'Teknisi' | 'Staf';
 export type AssetCategory =

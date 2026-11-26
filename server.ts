@@ -18,6 +18,7 @@ import {
 } from './server/auth.ts';
 import {
   db,
+  getBrandingSettings,
   mapAsset,
   mapAttendance,
   mapLoan,
@@ -25,6 +26,7 @@ import {
   mapSchedule,
   mapUserPrivateInfo,
   mapUserProfile,
+  saveBrandingSettings,
   type DbUserRow,
 } from './server/db.ts';
 
@@ -132,6 +134,27 @@ function forceLogoutSocket(uid: string): void {
     }
   }
 }
+
+// --- BRANDING SETTINGS ---
+
+app.get('/api/settings/branding', (_req, res) => {
+  res.json(getBrandingSettings());
+});
+
+app.put('/api/settings/branding', requireAuth, requireAdmin, (req, res) => {
+  const appName = clampStr(req.body?.appName, 40);
+  const appSubtitle = clampStr(req.body?.appSubtitle, 120);
+  const schoolName = clampStr(req.body?.schoolName, 100);
+
+  if (!appName || !appSubtitle || !schoolName) {
+    res.status(400).json({ error: 'Nama aplikasi, subjudul, dan nama instansi wajib diisi.' });
+    return;
+  }
+
+  const saved = saveBrandingSettings({ appName, appSubtitle, schoolName });
+  broadcastSync('branding');
+  res.json(saved);
+});
 
 // --- AUTH ROUTES ---
 
