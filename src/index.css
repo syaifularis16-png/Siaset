@@ -5,6 +5,32 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+.sipalak-app-bg {
+  background-color: #f6f8fc;
+  background-image:
+    radial-gradient(64rem 38rem at 96% -4%, rgba(191, 219, 254, 0.45), transparent 60%),
+    radial-gradient(48rem 34rem at 12% 104%, rgba(224, 242, 254, 0.48), transparent 62%),
+    radial-gradient(rgba(15, 33, 58, 0.045) 1px, transparent 1px);
+  background-size: auto, auto, 24px 24px;
+}
+
+.sipalak-sidebar-bg {
+  background-color: #0d1d33;
+  background-image:
+    radial-gradient(22rem 16rem at 18% 0%, rgba(56, 189, 248, 0.14), transparent 72%),
+    linear-gradient(180deg, #0c1b30 0%, #0f213a 52%, #0a1628 100%);
+}
+
+.sipalak-auth-bg {
+  background-color: #081324;
+  background-image:
+    radial-gradient(54rem 34rem at 12% 8%, rgba(37, 99, 235, 0.2), transparent 62%),
+    radial-gradient(46rem 32rem at 90% 92%, rgba(14, 165, 233, 0.14), transparent 60%),
+    radial-gradient(rgba(148, 163, 184, 0.1) 1px, transparent 1px),
+    linear-gradient(160deg, #071120 0%, #0d1d35 55%, #081426 100%);
+  background-size: auto, auto, 24px 24px, auto;
+}
+
 @media print {
   body * {
     visibility: hidden;

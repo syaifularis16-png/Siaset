@@ -64,9 +64,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
-        <div className="px-6 pt-7 pb-6 border-b border-slate-800 bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/50">
+    <div className="min-h-screen sipalak-auth-bg text-slate-100 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-slate-900/88 backdrop-blur-xl border border-white/12 rounded-2xl shadow-2xl overflow-hidden">
+        <div className="px-6 pt-7 pb-6 border-b border-white/10 bg-gradient-to-br from-slate-900/90 via-[#0f213a]/85 to-sky-950/60">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-11 h-11 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
               <Monitor className="w-6 h-6" />
@@ -226,7 +226,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 disabled={loading}
                 className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
-                {loading ? 'Memproses...' : 'Masuk ke SIPALAK'}
+                {loading ? 'Memproses...' : 'Masuk'}
                 <ArrowRight className="w-4 h-4" />
               </button>
             </form>

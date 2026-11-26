@@ -278,7 +278,7 @@ export function App() {
 
   if (booting) {
     return (
-      <div className="min-h-screen bg-[#0f213a] text-slate-200 flex items-center justify-center">
+      <div className="min-h-screen sipalak-auth-bg text-slate-200 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-white animate-pulse">
             <Monitor className="w-5 h-5" />
@@ -364,7 +364,7 @@ export function App() {
   const roleLabel = ROLE_LABELS[profile.role] ?? profile.role;
 
   const renderSidebarBody = (onClose?: () => void) => (
-    <div className="flex flex-col h-full bg-[#0f213a] text-slate-200">
+    <div className="flex flex-col h-full sipalak-sidebar-bg text-slate-200">
       <div className="px-5 pt-5 pb-4 border-b border-white/10">
         <div className="flex items-start justify-between gap-2">
           <div>
@@ -445,7 +445,7 @@ export function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-900 flex">
+    <div className="min-h-screen sipalak-app-bg text-slate-900 flex">
       {/* Desktop Sidebar */}
       <aside className="hidden lg:block lg:w-[250px] shrink-0 border-r border-slate-800/40">
         <div className="sticky top-0 h-screen">{renderSidebarBody()}</div>
@@ -466,7 +466,7 @@ export function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="bg-white border-b border-slate-200/80 px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between gap-4 sticky top-0 z-30">
+        <header className="bg-white/85 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between gap-4 sticky top-0 z-30">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
