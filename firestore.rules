@@ -403,6 +403,10 @@ service cloud.firestore {
             && existing().status == 'Menunggu'
             && incoming().status == 'Menunggu'
             && incoming().diff(existing()).affectedKeys().hasOnly(['borrowDate', 'returnDate', 'lessonPeriod', 'borrowTime', 'returnTime', 'purpose', 'notes', 'updatedAt']))
+          || (existing().requesterId == request.auth.uid
+            && (existing().status == 'Dipinjam' || existing().status == 'Disetujui')
+            && incoming().status == 'Dikembalikan'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'returnDate', 'notes', 'updatedAt']))
         );
       allow delete: if isValidId(loanId) && (isAdmin() || (isSignedIn() && existing().requesterId == request.auth.uid && existing().status == 'Menunggu'));
     }

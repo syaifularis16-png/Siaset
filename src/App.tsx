@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
   LayoutGrid,
@@ -15,6 +15,7 @@ import {
   GraduationCap,
   Shield,
   Pencil,
+  ScanBarcode,
 } from 'lucide-react';
 import { authApi, formatApiError } from './lib/api';
 import { auth } from './lib/firebase';
@@ -41,11 +42,13 @@ import { UsersTab } from './components/UsersTab';
 import { ReportsTab } from './components/ReportsTab';
 import { ProfileTab } from './components/ProfileTab';
 import { BrandingModal } from './components/BrandingModal';
+import { ReturnsTab } from './components/ReturnsTab';
 
 type TabKey =
   | 'overview'
   | 'assets'
   | 'loans'
+  | 'returns'
   | 'schedules'
   | 'maintenances'
   | 'users'
@@ -99,6 +102,8 @@ export function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const profileUidRef = useRef<string | null>(null);
+  profileUidRef.current = profile?.uid ?? null;
 
   useEffect(() => {
     document.title = `${branding.appName} — ${branding.appSubtitle}`;
@@ -135,6 +140,11 @@ export function App() {
         return;
       }
 
+      if (profileUidRef.current === firebaseUser.uid) {
+        if (!cancelled) setBooting(false);
+        return;
+      }
+
       try {
         const res = await resolveFirebaseSession(firebaseUser);
         if (cancelled) return;
@@ -145,7 +155,7 @@ export function App() {
           setAuthNotice(null);
           setActiveTab((prev) => {
             if (res.profile.role === 'guru' || res.profile.role === 'siswa') {
-              return prev === 'loans' ? 'loans' : 'assets';
+              return prev === 'loans' || prev === 'returns' ? prev : 'assets';
             }
             return prev;
           });
@@ -196,15 +206,16 @@ export function App() {
   }, [profileUid, isAdmin]);
 
   const handleLogout = async () => {
+    setProfile(null);
+    setPrivateInfo(null);
+    setOnboardingUser(null);
+    setData(EMPTY_SNAPSHOT);
+    await Promise.resolve();
     try {
       await authApi.logout();
     } catch {
       // Ignore transient signOut errors
     }
-    setProfile(null);
-    setPrivateInfo(null);
-    setOnboardingUser(null);
-    setData(EMPTY_SNAPSHOT);
   };
 
   if (booting) {
@@ -227,6 +238,7 @@ export function App() {
         initialNotice={authNotice}
         onboardingUser={onboardingUser}
         onAuthenticated={(nextProfile, nextPrivate) => {
+          profileUidRef.current = nextProfile.uid;
           setProfile(nextProfile);
           setPrivateInfo(nextPrivate);
           setOnboardingUser(null);
@@ -250,7 +262,18 @@ export function App() {
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     adminOnly?: boolean;
+    count?: number;
   };
+
+  const pendingLoansCount = data.loans.filter((l) => l.status === 'Menunggu').length;
+  const returnableLoansCount = data.loans.filter(
+    (l) =>
+      (l.status === 'Dipinjam' || l.status === 'Disetujui') &&
+      (isAdmin || l.requesterId === profile.uid)
+  ).length;
+  const pendingSchedulesCount = data.schedules.filter((s) => s.status === 'Menunggu').length;
+  const openMaintenanceCount = data.maintenances.filter((m) => m.status !== 'Selesai').length;
+  const activeAttendanceCount = data.attendances.filter((a) => !a.checkOutTime).length;
 
   const navGroups: { title: string; items: NavItem[] }[] = isGuruOrSiswa
     ? [
@@ -259,6 +282,12 @@ export function App() {
           items: [
             { key: 'assets', label: 'Inventaris', icon: Monitor },
             { key: 'loans', label: 'Peminjaman', icon: ArrowLeftRight },
+            {
+              key: 'returns',
+              label: 'Pengembalian',
+              icon: ScanBarcode,
+              count: returnableLoansCount > 0 ? returnableLoansCount : undefined,
+            },
           ],
         },
       ]
@@ -271,16 +300,42 @@ export function App() {
           title: 'MANAJEMEN LAB',
           items: [
             { key: 'assets', label: 'Inventaris', icon: Monitor },
-            { key: 'loans', label: 'Peminjaman', icon: ArrowLeftRight },
-            { key: 'schedules', label: 'Jadwal Lab', icon: CalendarDays },
-            { key: 'maintenances', label: 'Maintenance', icon: Wrench },
+            {
+              key: 'loans',
+              label: 'Peminjaman',
+              icon: ArrowLeftRight,
+              count: pendingLoansCount > 0 ? pendingLoansCount : undefined,
+            },
+            {
+              key: 'returns',
+              label: 'Pengembalian',
+              icon: ScanBarcode,
+              count: returnableLoansCount > 0 ? returnableLoansCount : undefined,
+            },
+            {
+              key: 'schedules',
+              label: 'Jadwal Lab',
+              icon: CalendarDays,
+              count: pendingSchedulesCount > 0 ? pendingSchedulesCount : undefined,
+            },
+            {
+              key: 'maintenances',
+              label: 'Maintenance',
+              icon: Wrench,
+              count: openMaintenanceCount > 0 ? openMaintenanceCount : undefined,
+            },
             { key: 'users', label: 'Pengguna', icon: User, adminOnly: true },
           ],
         },
         {
           title: 'ADMINISTRASI',
           items: [
-            { key: 'attendances', label: 'Absensi', icon: Check },
+            {
+              key: 'attendances',
+              label: 'Absensi',
+              icon: Check,
+              count: activeAttendanceCount > 0 ? activeAttendanceCount : undefined,
+            },
             { key: 'reports', label: 'Laporan', icon: FileText },
             { key: 'profile', label: 'Profil Saya', icon: UserCog },
           ],
@@ -288,13 +343,15 @@ export function App() {
       ];
 
   const effectiveTab: TabKey =
-    isGuruOrSiswa && activeTab !== 'assets' && activeTab !== 'loans' ? 'assets' : activeTab;
+    isGuruOrSiswa && activeTab !== 'assets' && activeTab !== 'loans' && activeTab !== 'returns'
+      ? 'assets'
+      : activeTab;
 
   const allItems = navGroups.flatMap((g) => g.items);
   const currentTitle = allItems.find((i) => i.key === effectiveTab)?.label ?? 'Inventaris';
 
   const selectTab = (key: TabKey) => {
-    if (isGuruOrSiswa && key !== 'assets' && key !== 'loans') {
+    if (isGuruOrSiswa && key !== 'assets' && key !== 'loans' && key !== 'returns') {
       setActiveTab('assets');
     } else {
       setActiveTab(key);
@@ -397,7 +454,12 @@ export function App() {
                       }`}
                     >
                       <Icon className="w-4 h-4 shrink-0 opacity-85" />
-                      <span>{item.label}</span>
+                      <span className="flex-1 text-left">{item.label}</span>
+                      {item.count !== undefined && (
+                        <span className="text-[11px] font-mono tabular-nums text-amber-300">
+                          {item.count}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -487,11 +549,18 @@ export function App() {
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1200px] w-full mx-auto">
           {effectiveTab === 'overview' && (
-            <OverviewTab data={data} profile={profile} onNavigate={selectTab} />
+            <OverviewTab
+              data={data}
+              profile={profile}
+              branding={branding}
+              onNavigate={selectTab}
+            />
           )}
           {effectiveTab === 'assets' && (
             <AssetsTab
               assets={data.assets}
+              loans={data.loans}
+              maintenances={data.maintenances}
               branding={branding}
               isAdmin={isAdmin}
               onRefresh={refreshSnapshot}
@@ -500,6 +569,17 @@ export function App() {
           )}
           {effectiveTab === 'loans' && (
             <LoansTab
+              loans={data.loans}
+              assets={data.assets}
+              profile={profile}
+              branding={branding}
+              isAdmin={isAdmin}
+              onRefresh={refreshSnapshot}
+              onNotify={notify}
+            />
+          )}
+          {effectiveTab === 'returns' && (
+            <ReturnsTab
               loans={data.loans}
               assets={data.assets}
               profile={profile}
@@ -545,7 +625,7 @@ export function App() {
               onNotify={notify}
             />
           )}
-          {effectiveTab === 'reports' && <ReportsTab data={data} />}
+          {effectiveTab === 'reports' && <ReportsTab data={data} branding={branding} />}
           {effectiveTab === 'profile' && (
             <ProfileTab
               profile={profile}

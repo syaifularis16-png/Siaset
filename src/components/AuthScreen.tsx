@@ -3,7 +3,7 @@ import { ArrowLeft, Eye, EyeOff, LogOut } from 'lucide-react';
 import {
   completeSelfRegistration,
   registerWithUsernamePassword,
-  signInWithUsernameOrEmail,
+  signInAndResolveSession,
   signOutFirebase,
 } from '../lib/firebaseBackend';
 import { formatApiError } from '../lib/api';
@@ -115,7 +115,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     resetErrors();
     setLoading(true);
     try {
-      await signInWithUsernameOrEmail(identifier, password);
+      const res = await signInAndResolveSession(identifier, password);
+      if (res.status === 'ready') {
+        onAuthenticated(res.profile, res.privateInfo);
+      }
     } catch (err) {
       handleAuthException(err, 'Gagal masuk ke sistem.');
     } finally {

@@ -32,6 +32,7 @@ import {
   getSecondaryAuth,
   googleProvider,
   handleFirestoreError,
+  logFirestoreError,
   OperationType,
 } from './firebase';
 import {
@@ -174,6 +175,38 @@ async function decryptEmailEnvelope(
   return new TextDecoder().decode(plainBuf);
 }
 
+const USERNAME_EMAIL_CACHE_PREFIX = 'sipalak_uemail:';
+const roleCache = new Map<string, SystemRole>();
+const inFlightSessions = new Map<string, Promise<SessionResolution>>();
+
+function getCachedUsernameEmail(usernameKey: string): string | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    const val = window.localStorage.getItem(`${USERNAME_EMAIL_CACHE_PREFIX}${usernameKey}`);
+    return val && val.includes('@') ? val : null;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedUsernameEmail(usernameKey: string, email: string): void {
+  try {
+    if (typeof window === 'undefined' || !usernameKey || !email.includes('@')) return;
+    window.localStorage.setItem(`${USERNAME_EMAIL_CACHE_PREFIX}${usernameKey}`, email.toLowerCase());
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function clearCachedUsernameEmail(usernameKey: string): void {
+  try {
+    if (typeof window === 'undefined' || !usernameKey) return;
+    window.localStorage.removeItem(`${USERNAME_EMAIL_CACHE_PREFIX}${usernameKey}`);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 async function upsertUsernameEnvelope(
   uid: string,
   usernameKey: string,
@@ -194,6 +227,7 @@ async function upsertUsernameEnvelope(
     encryptedEmail: encrypted.encryptedEmail,
     updatedAt: serverTimestamp(),
   });
+  setCachedUsernameEmail(usernameKey, email);
 }
 
 function toIsoString(val: unknown): string {
@@ -375,14 +409,35 @@ function requireCurrentUser(): User {
 
 async function getCurrentUserRole(uid: string): Promise<SystemRole> {
   const email = (auth.currentUser?.email || '').toLowerCase();
-  if (auth.currentUser?.emailVerified && BOOTSTRAP_ADMIN_EMAILS.has(email)) return 'admin';
+  const isVerifiedBootstrapAdmin = Boolean(
+    auth.currentUser?.emailVerified && BOOTSTRAP_ADMIN_EMAILS.has(email)
+  );
+  if (isVerifiedBootstrapAdmin) {
+    roleCache.set(uid, 'admin');
+    return 'admin';
+  }
+  const cached = roleCache.get(uid);
+  if (cached) return cached;
+
   const userPath = `users/${uid}`;
   try {
-    const snap = await getDoc(doc(db, 'users', uid));
+    const [snap, adminSnap] = await Promise.all([
+      getDoc(doc(db, 'users', uid)),
+      getDoc(doc(db, 'admins', uid)).catch(() => null),
+    ]);
     if (snap.exists()) {
       const role = snap.data().role as SystemRole;
-      if (ALLOWED_ROLES.has(role)) return role;
+      if (role === 'admin') {
+        const resolvedRole: SystemRole = adminSnap?.exists() ? 'admin' : 'pengguna';
+        roleCache.set(uid, resolvedRole);
+        return resolvedRole;
+      }
+      if (ALLOWED_ROLES.has(role)) {
+        roleCache.set(uid, role);
+        return role;
+      }
     }
+    roleCache.set(uid, 'pengguna');
     return 'pengguna';
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, userPath);
@@ -394,6 +449,28 @@ export async function signInWithGoogle(): Promise<User> {
   return res.user;
 }
 
+async function resolveUsernameLoginEmail(usernameKey: string, password: string): Promise<string> {
+  let envSnap;
+  try {
+    envSnap = await getDoc(doc(db, 'username_auth', usernameKey));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, `username_auth/${usernameKey}`);
+  }
+  if (!envSnap.exists()) {
+    throw new Error('Nama pengguna tidak ditemukan atau belum memiliki kata sandi.');
+  }
+  const envData = envSnap.data();
+  try {
+    return await decryptEmailEnvelope(usernameKey, password, {
+      salt: String(envData.salt ?? ''),
+      iv: String(envData.iv ?? ''),
+      encryptedEmail: String(envData.encryptedEmail ?? ''),
+    });
+  } catch {
+    throw new Error('Nama pengguna atau kata sandi salah.');
+  }
+}
+
 export async function signInWithUsernameOrEmail(
   identifier: string,
   password: string
@@ -403,37 +480,58 @@ export async function signInWithUsernameOrEmail(
     throw new Error('Nama pengguna dan kata sandi wajib diisi.');
   }
 
-  let loginEmail = '';
   if (raw.includes('@')) {
-    loginEmail = raw.toLowerCase();
-  } else {
-    const usernameKey = sanitizeUsername(raw);
-    if (!usernameKey) {
-      throw new Error('Format nama pengguna tidak valid.');
-    }
-    let envSnap;
+    const res = await signInWithEmailAndPassword(auth, raw.toLowerCase(), password);
+    return res.user;
+  }
+
+  const usernameKey = sanitizeUsername(raw);
+  if (!usernameKey) {
+    throw new Error('Format nama pengguna tidak valid.');
+  }
+
+  // Fast path: skip Firestore username_auth lookup + 100k PBKDF2 when cached locally
+  const cachedEmail = getCachedUsernameEmail(usernameKey);
+  if (cachedEmail) {
     try {
-      envSnap = await getDoc(doc(db, 'username_auth', usernameKey));
+      const res = await signInWithEmailAndPassword(auth, cachedEmail, password);
+      return res.user;
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `username_auth/${usernameKey}`);
-    }
-    if (!envSnap.exists()) {
-      throw new Error('Nama pengguna tidak ditemukan atau belum memiliki kata sandi.');
-    }
-    const envData = envSnap.data();
-    try {
-      loginEmail = await decryptEmailEnvelope(usernameKey, password, {
-        salt: String(envData.salt ?? ''),
-        iv: String(envData.iv ?? ''),
-        encryptedEmail: String(envData.encryptedEmail ?? ''),
-      });
-    } catch {
-      throw new Error('Nama pengguna atau kata sandi salah.');
+      const code = (err as { code?: string })?.code;
+      if (code === 'auth/too-many-requests') {
+        throw err;
+      }
+      // Verify against Firestore envelope in case user changed email or cache is stale
+      let freshEmail: string;
+      try {
+        freshEmail = await resolveUsernameLoginEmail(usernameKey, password);
+      } catch (lookupErr) {
+        if ((lookupErr as Error)?.message?.includes('tidak ditemukan')) {
+          clearCachedUsernameEmail(usernameKey);
+        }
+        throw err;
+      }
+      if (freshEmail.toLowerCase() === cachedEmail.toLowerCase()) {
+        throw err;
+      }
+      setCachedUsernameEmail(usernameKey, freshEmail);
+      const res = await signInWithEmailAndPassword(auth, freshEmail, password);
+      return res.user;
     }
   }
 
+  const loginEmail = await resolveUsernameLoginEmail(usernameKey, password);
   const res = await signInWithEmailAndPassword(auth, loginEmail, password);
+  setCachedUsernameEmail(usernameKey, loginEmail);
   return res.user;
+}
+
+export async function signInAndResolveSession(
+  identifier: string,
+  password: string
+): Promise<SessionResolution> {
+  const user = await signInWithUsernameOrEmail(identifier, password);
+  return resolveFirebaseSession(user);
 }
 
 let activeRegistrationPromise: Promise<unknown> | null = null;
@@ -537,6 +635,8 @@ export async function registerWithUsernamePassword(input: {
 }
 
 export async function signOutFirebase(): Promise<void> {
+  roleCache.clear();
+  inFlightSessions.clear();
   await signOut(auth);
 }
 
@@ -545,6 +645,21 @@ export type SessionResolution =
   | { status: 'needs_onboarding'; email: string; displayName: string };
 
 export async function resolveFirebaseSession(user: User): Promise<SessionResolution> {
+  const existingTask = inFlightSessions.get(user.uid);
+  if (existingTask) {
+    return existingTask;
+  }
+
+  const task = resolveFirebaseSessionInternal(user).finally(() => {
+    if (inFlightSessions.get(user.uid) === task) {
+      inFlightSessions.delete(user.uid);
+    }
+  });
+  inFlightSessions.set(user.uid, task);
+  return task;
+}
+
+async function resolveFirebaseSessionInternal(user: User): Promise<SessionResolution> {
   if (activeRegistrationPromise) {
     await activeRegistrationPromise.catch(() => {});
   }
@@ -552,49 +667,97 @@ export async function resolveFirebaseSession(user: User): Promise<SessionResolut
   const email = (user.email || '').trim().toLowerCase();
   const userDocRef = doc(db, 'users', uid);
   const privateDocRef = doc(db, 'users', uid, 'private', 'info');
+  const adminRef = doc(db, 'admins', uid);
 
   let userSnap;
+  let privateSnap = null;
+  let adminSnap = null;
   try {
-    userSnap = await getDoc(userDocRef);
+    [userSnap, privateSnap, adminSnap] = await Promise.all([
+      getDoc(userDocRef),
+      getDoc(privateDocRef).catch(() => null),
+      getDoc(adminRef).catch(() => null),
+    ]);
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, `users/${uid}`);
   }
 
   if (userSnap.exists()) {
-    const profile = mapUserProfileDoc(uid, userSnap.data());
+    const rawUserData = userSnap.data();
+    const profile = mapUserProfileDoc(uid, rawUserData);
     if (!profile.active) {
       await signOut(auth);
       throw new Error('Akun Anda telah dinonaktifkan oleh Administrator.');
     }
 
-    let privateSnap;
-    try {
-      privateSnap = await getDoc(privateDocRef);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.GET, `users/${uid}/private/info`);
+    const isVerifiedBootstrap = Boolean(user.emailVerified && BOOTSTRAP_ADMIN_EMAILS.has(email));
+    if (profile.role === 'admin') {
+      try {
+        if (!adminSnap || !adminSnap.exists()) {
+          if (isVerifiedBootstrap) {
+            await setDoc(adminRef, {
+              uid,
+              grantedBy: uid,
+              createdAt: serverTimestamp(),
+            });
+          } else if (
+            user.emailVerified &&
+            typeof rawUserData.inviteId === 'string' &&
+            rawUserData.inviteId
+          ) {
+            const inviteSnap = await getDoc(doc(db, 'user_invites', rawUserData.inviteId));
+            if (inviteSnap.exists() && typeof inviteSnap.data().invitedBy === 'string') {
+              await setDoc(adminRef, {
+                uid,
+                grantedBy: inviteSnap.data().invitedBy,
+                createdAt: serverTimestamp(),
+              });
+            } else {
+              profile.role = 'pengguna';
+            }
+          } else {
+            profile.role = 'pengguna';
+          }
+        }
+      } catch (err) {
+        logFirestoreError(err, OperationType.GET, `admins/${uid}`);
+        if (!isVerifiedBootstrap) {
+          profile.role = 'pengguna';
+        }
+      }
+    }
+
+    roleCache.set(uid, profile.role);
+    if (profile.username && email) {
+      setCachedUsernameEmail(sanitizeUsername(profile.username), email);
     }
 
     let privateInfo: UserPrivateInfo;
-    if (privateSnap.exists()) {
+    if (privateSnap && privateSnap.exists()) {
       privateInfo = mapUserPrivateDoc(uid, privateSnap.data());
     } else {
-      const payload = {
-        uid,
-        email: clampStr(email, 120),
-        phone: '',
-        updatedAt: serverTimestamp(),
-      };
-      try {
-        await setDoc(privateDocRef, payload);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `users/${uid}/private/info`);
+      const resolvedPrivateSnap = await getDoc(privateDocRef).catch(() => null);
+      if (resolvedPrivateSnap && resolvedPrivateSnap.exists()) {
+        privateInfo = mapUserPrivateDoc(uid, resolvedPrivateSnap.data());
+      } else {
+        const payload = {
+          uid,
+          email: clampStr(email, 120),
+          phone: '',
+          updatedAt: serverTimestamp(),
+        };
+        try {
+          await setDoc(privateDocRef, payload);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `users/${uid}/private/info`);
+        }
+        privateInfo = {
+          uid,
+          email: clampStr(email, 120),
+          phone: '',
+          updatedAt: new Date().toISOString(),
+        };
       }
-      privateInfo = {
-        uid,
-        email: clampStr(email, 120),
-        phone: '',
-        updatedAt: new Date().toISOString(),
-      };
     }
 
     return { status: 'ready', profile, privateInfo };
@@ -868,7 +1031,8 @@ export function subscribeFirestoreBranding(
       });
     },
     (err) => {
-      handleFirestoreError(err, OperationType.GET, 'settings/branding');
+      logFirestoreError(err, OperationType.GET, 'settings/branding');
+      onData({ ...DEFAULT_BRANDING });
     }
   );
 }
@@ -975,8 +1139,9 @@ export function subscribeFirestoreSnapshot(
         onUpdate((prev) => ({ ...prev, assets }));
       },
       (err) => {
+        if (!auth.currentUser) return;
+        logFirestoreError(err, OperationType.LIST, 'assets');
         onError(err);
-        handleFirestoreError(err, OperationType.LIST, 'assets');
       }
     )
   );
@@ -993,8 +1158,9 @@ export function subscribeFirestoreSnapshot(
         onUpdate((prev) => ({ ...prev, loans }));
       },
       (err) => {
+        if (!auth.currentUser) return;
+        logFirestoreError(err, OperationType.LIST, 'loans');
         onError(err);
-        handleFirestoreError(err, OperationType.LIST, 'loans');
       }
     )
   );
@@ -1009,8 +1175,9 @@ export function subscribeFirestoreSnapshot(
         onUpdate((prev) => ({ ...prev, schedules }));
       },
       (err) => {
+        if (!auth.currentUser) return;
+        logFirestoreError(err, OperationType.LIST, 'schedules');
         onError(err);
-        handleFirestoreError(err, OperationType.LIST, 'schedules');
       }
     )
   );
@@ -1027,8 +1194,9 @@ export function subscribeFirestoreSnapshot(
         onUpdate((prev) => ({ ...prev, maintenances }));
       },
       (err) => {
+        if (!auth.currentUser) return;
+        logFirestoreError(err, OperationType.LIST, 'maintenances');
         onError(err);
-        handleFirestoreError(err, OperationType.LIST, 'maintenances');
       }
     )
   );
@@ -1045,8 +1213,9 @@ export function subscribeFirestoreSnapshot(
         onUpdate((prev) => ({ ...prev, attendances }));
       },
       (err) => {
+        if (!auth.currentUser) return;
+        logFirestoreError(err, OperationType.LIST, 'attendances');
         onError(err);
-        handleFirestoreError(err, OperationType.LIST, 'attendances');
       }
     )
   );
@@ -1063,8 +1232,9 @@ export function subscribeFirestoreSnapshot(
         onUpdate((prev) => ({ ...prev, users }));
       },
       (err) => {
+        if (!auth.currentUser) return;
+        logFirestoreError(err, OperationType.LIST, 'users');
         onError(err);
-        handleFirestoreError(err, OperationType.LIST, 'users');
       }
     )
   );
@@ -1080,8 +1250,9 @@ export function subscribeFirestoreSnapshot(
           onUpdate((prev) => ({ ...prev, invites }));
         },
         (err) => {
+          if (!auth.currentUser) return;
+          logFirestoreError(err, OperationType.LIST, 'user_invites');
           onError(err);
-          handleFirestoreError(err, OperationType.LIST, 'user_invites');
         }
       )
     );
@@ -1336,6 +1507,69 @@ export async function handleFirebaseApiRequest<T>(
     }
   }
 
+  if (path === '/api/assets/import' && m === 'POST') {
+    if (!isAdmin) throw new Error('Hanya Administrator Lab yang dapat mengimpor aset.');
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (rawItems.length === 0) {
+      throw new Error('Tidak ada baris aset yang akan diimpor.');
+    }
+    if (rawItems.length > 100) {
+      throw new Error('Maksimal 100 aset per sekali impor.');
+    }
+
+    const sanitized = rawItems.map((raw, idx) => {
+      const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const code = clampStr(item.code, 50);
+      const name = clampStr(item.name, 100);
+      const categoryRaw = String(item.category || 'Komputer').trim() as AssetCategory;
+      const category = ALLOWED_ASSET_CATEGORIES.has(categoryRaw) ? categoryRaw : 'Lainnya';
+      const brand = clampStr(item.brand, 80) || '-';
+      const condRaw = String(item.condition || 'Baik').trim() as AssetCondition;
+      const condition = ALLOWED_ASSET_CONDITIONS.has(condRaw) ? condRaw : 'Baik';
+      const location = clampStr(item.location, 100) || 'Lab Komputer';
+      const fundingSource = clampStr(item.fundingSource, 80);
+      const procurementYear = Math.min(
+        2100,
+        Math.max(1990, Math.round(Number(item.procurementYear) || new Date().getFullYear()))
+      );
+      const nextMaintenanceDate = clampStr(item.nextMaintenanceDate, 20);
+
+      if (!code || !name) {
+        throw new Error(`Baris ${idx + 1}: Kode dan Nama aset wajib diisi.`);
+      }
+
+      return {
+        code,
+        name,
+        category,
+        brand,
+        condition,
+        location,
+        fundingSource,
+        procurementYear,
+        nextMaintenanceDate,
+      };
+    });
+
+    try {
+      const batch = writeBatch(db);
+      for (const s of sanitized) {
+        const ref = doc(collection(db, 'assets'));
+        batch.set(ref, {
+          ...s,
+          labScope: 'smkn1sambeng',
+          createdBy: uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+      return { ok: true, count: sanitized.length } as T;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'assets');
+    }
+  }
+
   if (path.startsWith('/api/assets/') && m === 'PUT') {
     if (!isAdmin) throw new Error('Hanya Administrator Lab yang dapat mengubah aset.');
     const id = path.slice('/api/assets/'.length);
@@ -1467,29 +1701,43 @@ export async function handleFirebaseApiRequest<T>(
     if (!existingSnap.exists()) throw new Error('Data peminjaman tidak ditemukan.');
     const existing = existingSnap.data();
 
-    try {
-      if (isAdmin) {
-        const status = String(body.status || existing.status) as LoanStatus;
-        if (!ALLOWED_LOAN_STATUSES.has(status)) {
-          throw new Error('Status peminjaman tidak valid.');
+    let updatePayload: Record<string, unknown>;
+    if (isAdmin) {
+      const status = String(body.status || existing.status) as LoanStatus;
+      if (!ALLOWED_LOAN_STATUSES.has(status)) {
+        throw new Error('Status peminjaman tidak valid.');
+      }
+      updatePayload = {
+        status,
+        notes: body.notes !== undefined ? clampStr(body.notes, 240) : String(existing.notes ?? ''),
+        returnDate: clampStr(body.returnDate, 20) || String(existing.returnDate ?? ''),
+        updatedAt: serverTimestamp(),
+      };
+    } else {
+      if (existing.requesterId !== uid) {
+        throw new Error('Anda tidak memiliki izin mengubah peminjaman ini.');
+      }
+      if (
+        (existing.status === 'Dipinjam' || existing.status === 'Disetujui') &&
+        body.status === 'Dikembalikan'
+      ) {
+        const scannedBarcode = clampStr(body.scannedAdminBarcode, 120).toLowerCase();
+        const expectedId = id.toLowerCase();
+        const expectedRef = id.slice(0, 10).toLowerCase();
+        if (!scannedBarcode || (scannedBarcode !== expectedId && scannedBarcode !== expectedRef)) {
+          throw new Error('Pengembalian wajib memindai barcode peminjaman dari Admin.');
         }
-        await updateDoc(loanRef, {
-          status,
+        updatePayload = {
+          status: 'Dikembalikan',
+          returnDate: clampStr(body.returnDate, 20) || String(existing.returnDate),
           notes: body.notes !== undefined ? clampStr(body.notes, 240) : String(existing.notes ?? ''),
-          returnDate:
-            body.returnDate !== undefined
-              ? clampStr(body.returnDate, 20)
-              : String(existing.returnDate ?? ''),
           updatedAt: serverTimestamp(),
-        });
+        };
       } else {
-        if (existing.requesterId !== uid) {
-          throw new Error('Anda tidak memiliki izin mengubah peminjaman ini.');
-        }
         if (existing.status !== 'Menunggu') {
           throw new Error('Peminjaman yang sudah diproses tidak dapat diubah.');
         }
-        await updateDoc(loanRef, {
+        updatePayload = {
           borrowDate: clampStr(body.borrowDate, 20) || String(existing.borrowDate),
           returnDate: clampStr(body.returnDate, 20) || String(existing.returnDate),
           lessonPeriod: clampStr(body.lessonPeriod, 40) || String(existing.lessonPeriod ?? ''),
@@ -1498,8 +1746,12 @@ export async function handleFirebaseApiRequest<T>(
           purpose: clampStr(body.purpose, 240) || String(existing.purpose),
           notes: body.notes !== undefined ? clampStr(body.notes, 240) : String(existing.notes ?? ''),
           updatedAt: serverTimestamp(),
-        });
+        };
       }
+    }
+
+    try {
+      await updateDoc(loanRef, updatePayload);
       return { ok: true } as T;
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `loans/${id}`);
@@ -1560,39 +1812,47 @@ export async function handleFirebaseApiRequest<T>(
   if (path.startsWith('/api/schedules/') && m === 'PUT') {
     const id = path.slice('/api/schedules/'.length);
     const schRef = doc(db, 'schedules', id);
-    const existingSnap = await getDoc(schRef);
+    let existingSnap;
+    try {
+      existingSnap = await getDoc(schRef);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, `schedules/${id}`);
+    }
     if (!existingSnap.exists()) throw new Error('Jadwal tidak ditemukan.');
     const existing = existingSnap.data();
 
-    try {
-      if (isAdmin) {
-        const status = String(body.status || existing.status) as ScheduleStatus;
-        if (!ALLOWED_SCHEDULE_STATUSES.has(status)) throw new Error('Status jadwal tidak valid.');
-        await updateDoc(schRef, {
-          status,
-          date: clampStr(body.date, 20) || String(existing.date),
-          startTime: clampStr(body.startTime, 10) || String(existing.startTime),
-          endTime: clampStr(body.endTime, 10) || String(existing.endTime),
-          activity: clampStr(body.activity, 120) || String(existing.activity),
-          unit: clampStr(body.unit, 60) || String(existing.unit),
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        if (existing.requesterId !== uid) {
-          throw new Error('Anda tidak memiliki izin mengubah jadwal ini.');
-        }
-        if (existing.status !== 'Menunggu') {
-          throw new Error('Jadwal yang sudah diproses tidak dapat diubah.');
-        }
-        await updateDoc(schRef, {
-          date: clampStr(body.date, 20) || String(existing.date),
-          startTime: clampStr(body.startTime, 10) || String(existing.startTime),
-          endTime: clampStr(body.endTime, 10) || String(existing.endTime),
-          activity: clampStr(body.activity, 120) || String(existing.activity),
-          unit: clampStr(body.unit, 60) || String(existing.unit),
-          updatedAt: serverTimestamp(),
-        });
+    let updatePayload: Record<string, unknown>;
+    if (isAdmin) {
+      const status = String(body.status || existing.status) as ScheduleStatus;
+      if (!ALLOWED_SCHEDULE_STATUSES.has(status)) throw new Error('Status jadwal tidak valid.');
+      updatePayload = {
+        status,
+        date: clampStr(body.date, 20) || String(existing.date),
+        startTime: clampStr(body.startTime, 10) || String(existing.startTime),
+        endTime: clampStr(body.endTime, 10) || String(existing.endTime),
+        activity: clampStr(body.activity, 120) || String(existing.activity),
+        unit: clampStr(body.unit, 60) || String(existing.unit),
+        updatedAt: serverTimestamp(),
+      };
+    } else {
+      if (existing.requesterId !== uid) {
+        throw new Error('Anda tidak memiliki izin mengubah jadwal ini.');
       }
+      if (existing.status !== 'Menunggu') {
+        throw new Error('Jadwal yang sudah diproses tidak dapat diubah.');
+      }
+      updatePayload = {
+        date: clampStr(body.date, 20) || String(existing.date),
+        startTime: clampStr(body.startTime, 10) || String(existing.startTime),
+        endTime: clampStr(body.endTime, 10) || String(existing.endTime),
+        activity: clampStr(body.activity, 120) || String(existing.activity),
+        unit: clampStr(body.unit, 60) || String(existing.unit),
+        updatedAt: serverTimestamp(),
+      };
+    }
+
+    try {
+      await updateDoc(schRef, updatePayload);
       return { ok: true } as T;
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `schedules/${id}`);
@@ -1652,15 +1912,7 @@ export async function handleFirebaseApiRequest<T>(
 
       if (body.syncAssetCondition) {
         await updateDoc(doc(db, 'assets', assetId), {
-          code: clampStr(assetData.code, 50),
-          name: clampStr(assetData.name, 100),
-          category: assetData.category,
-          brand: clampStr(assetData.brand, 80),
           condition: resultingCondition,
-          location: clampStr(assetData.location, 100),
-          fundingSource: clampStr(assetData.fundingSource ?? '', 80),
-          procurementYear: Number(assetData.procurementYear ?? 2026),
-          nextMaintenanceDate: clampStr(assetData.nextMaintenanceDate ?? '', 20),
           updatedAt: serverTimestamp(),
         });
       }
@@ -1708,21 +1960,12 @@ export async function handleFirebaseApiRequest<T>(
         updatedAt: serverTimestamp(),
       });
 
-      if (body.syncAssetCondition && typeof existing.assetId === 'string') {
+      if (body.syncAssetCondition && typeof existing.assetId === 'string' && existing.assetId) {
         const assetRef = doc(db, 'assets', existing.assetId);
         const assetSnap = await getDoc(assetRef);
         if (assetSnap.exists()) {
-          const assetData = assetSnap.data();
           await updateDoc(assetRef, {
-            code: clampStr(assetData.code, 50),
-            name: clampStr(assetData.name, 100),
-            category: assetData.category,
-            brand: clampStr(assetData.brand, 80),
             condition: resultingCondition,
-            location: clampStr(assetData.location, 100),
-            fundingSource: clampStr(assetData.fundingSource ?? '', 80),
-            procurementYear: Number(assetData.procurementYear ?? 2026),
-            nextMaintenanceDate: clampStr(assetData.nextMaintenanceDate ?? '', 20),
             updatedAt: serverTimestamp(),
           });
         }
@@ -1791,38 +2034,50 @@ export async function handleFirebaseApiRequest<T>(
   if (path.startsWith('/api/attendances/') && m === 'PUT') {
     const id = path.slice('/api/attendances/'.length);
     const attRef = doc(db, 'attendances', id);
-    const existingSnap = await getDoc(attRef);
+    let existingSnap;
+    try {
+      existingSnap = await getDoc(attRef);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, `attendances/${id}`);
+    }
     if (!existingSnap.exists()) throw new Error('Catatan absensi tidak ditemukan.');
     const existing = existingSnap.data();
 
-    try {
-      if (isAdmin) {
-        await updateDoc(attRef, {
-          checkOutTime:
-            body.checkOutTime !== undefined
-              ? clampStr(body.checkOutTime, 10)
-              : String(existing.checkOutTime ?? ''),
-          workstation:
-            body.workstation !== undefined
-              ? clampStr(body.workstation, 40)
-              : String(existing.workstation ?? ''),
-          notes: body.notes !== undefined ? clampStr(body.notes, 200) : String(existing.notes ?? ''),
-          activity: clampStr(body.activity, 120) || String(existing.activity),
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        if (existing.userId !== uid) {
-          throw new Error('Anda tidak memiliki izin mengubah absensi ini.');
-        }
-        if (existing.checkOutTime) {
-          throw new Error('Absensi keluar sudah tercatat.');
-        }
-        await updateDoc(attRef, {
-          checkOutTime: clampStr(body.checkOutTime, 10),
-          notes: body.notes !== undefined ? clampStr(body.notes, 200) : String(existing.notes ?? ''),
-          updatedAt: serverTimestamp(),
-        });
+    let updatePayload: Record<string, unknown>;
+    if (isAdmin) {
+      updatePayload = {
+        checkOutTime:
+          body.checkOutTime !== undefined
+            ? clampStr(body.checkOutTime, 10)
+            : String(existing.checkOutTime ?? ''),
+        workstation:
+          body.workstation !== undefined
+            ? clampStr(body.workstation, 40)
+            : String(existing.workstation ?? ''),
+        notes: body.notes !== undefined ? clampStr(body.notes, 200) : String(existing.notes ?? ''),
+        activity: clampStr(body.activity, 120) || String(existing.activity),
+        updatedAt: serverTimestamp(),
+      };
+    } else {
+      if (existing.userId !== uid) {
+        throw new Error('Anda tidak memiliki izin mengubah absensi ini.');
       }
+      if (existing.checkOutTime) {
+        throw new Error('Absensi keluar sudah tercatat.');
+      }
+      const checkOutTime = clampStr(body.checkOutTime, 10);
+      if (!checkOutTime) {
+        throw new Error('Waktu keluar wajib diisi.');
+      }
+      updatePayload = {
+        checkOutTime,
+        notes: body.notes !== undefined ? clampStr(body.notes, 200) : String(existing.notes ?? ''),
+        updatedAt: serverTimestamp(),
+      };
+    }
+
+    try {
+      await updateDoc(attRef, updatePayload);
       return { ok: true } as T;
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `attendances/${id}`);
@@ -2064,7 +2319,9 @@ export async function handleFirebaseApiRequest<T>(
 
       return { ok: true } as T;
     } catch (err) {
-      if (err instanceof Error && !err.message.startsWith('{')) throw err;
+      const hasFirebaseCode =
+        typeof err === 'object' && err !== null && typeof (err as { code?: unknown }).code === 'string';
+      if (!hasFirebaseCode && err instanceof Error) throw err;
       handleFirestoreError(err, OperationType.UPDATE, `users/${targetUid}`);
     }
   }

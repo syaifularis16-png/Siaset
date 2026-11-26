@@ -32,11 +32,19 @@
 }
 
 @media print {
+  @page {
+    margin: 12mm;
+  }
+  body {
+    background: #ffffff !important;
+  }
   body * {
     visibility: hidden;
   }
   #qr-print-area,
-  #qr-print-area * {
+  #qr-print-area *,
+  [data-print-root='true'],
+  [data-print-root='true'] * {
     visibility: visible;
   }
   #qr-print-area {
@@ -44,5 +52,18 @@
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
+    background: #ffffff;
+  }
+  [data-print-root='true'] {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
   }
 }

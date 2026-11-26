@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Plus, Pencil, Trash2, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Check, Pencil, Play, Plus, Search, Trash2, Wrench, X } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
   ASSET_CONDITIONS,
@@ -29,25 +29,66 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
   onRefresh,
   onNotify,
 }) => {
+  const today = todayIsoDate();
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | MaintenanceStatus>('ALL');
+
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [assetId, setAssetId] = useState('');
   const [issue, setIssue] = useState('');
   const [actionTaken, setActionTaken] = useState('');
   const [technicianName, setTechnicianName] = useState(profile.displayName);
-  const [maintenanceDate, setMaintenanceDate] = useState(todayIsoDate());
+  const [maintenanceDate, setMaintenanceDate] = useState(today);
   const [status, setStatus] = useState<MaintenanceStatus>('Dijadwalkan');
   const [resultingCondition, setResultingCondition] = useState<AssetCondition>('Baik');
   const [syncAssetCondition, setSyncAssetCondition] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const openCreate = () => {
+  const attentionAssets = useMemo(
+    () =>
+      assets.filter(
+        (a) =>
+          a.condition !== 'Baik' ||
+          (a.nextMaintenanceDate && a.nextMaintenanceDate <= today)
+      ),
+    [assets, today]
+  );
+
+  const stats = useMemo(() => {
+    const scheduled = maintenances.filter((m) => m.status === 'Dijadwalkan').length;
+    const inProgress = maintenances.filter((m) => m.status === 'Dalam Proses').length;
+    const completed = maintenances.filter((m) => m.status === 'Selesai').length;
+    return {
+      scheduled,
+      inProgress,
+      completed,
+      attentionCount: attentionAssets.length,
+    };
+  }, [maintenances, attentionAssets]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return maintenances.filter((m) => {
+      if (statusFilter !== 'ALL' && m.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        m.assetName.toLowerCase().includes(q) ||
+        m.assetCode.toLowerCase().includes(q) ||
+        m.issue.toLowerCase().includes(q) ||
+        m.technicianName.toLowerCase().includes(q) ||
+        m.actionTaken.toLowerCase().includes(q)
+      );
+    });
+  }, [maintenances, search, statusFilter]);
+
+  const openCreate = (preselectedAssetId?: string) => {
     setEditingId(null);
-    setAssetId(assets[0]?.id ?? '');
+    setAssetId(preselectedAssetId || assets[0]?.id || '');
     setIssue('');
     setActionTaken('');
     setTechnicianName(profile.displayName);
-    setMaintenanceDate(todayIsoDate());
+    setMaintenanceDate(today);
     setStatus('Dijadwalkan');
     setResultingCondition('Baik');
     setSyncAssetCondition(true);
@@ -110,6 +151,22 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
     }
   };
 
+  const handleQuickStatus = async (m: Maintenance, nextStatus: MaintenanceStatus) => {
+    try {
+      await apiFetch(`/api/maintenances/${m.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          status: nextStatus,
+          syncAssetCondition: nextStatus === 'Selesai',
+        }),
+      });
+      onNotify(`Perawatan ${m.assetCode} diubah ke ${nextStatus}.`);
+      await onRefresh();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Gagal memperbarui status.', 'error');
+    }
+  };
+
   const handleDelete = async (m: Maintenance) => {
     try {
       await apiFetch(`/api/maintenances/${m.id}`, { method: 'DELETE' });
@@ -124,17 +181,19 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-slate-900">Perawatan & Perbaikan</h2>
-          <p className="text-sm text-slate-500">
-            Log pemeliharaan perangkat keras dan pembaruan kondisi aset.
+          <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+            Perawatan & Perbaikan
+          </h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Log pemeliharaan perangkat, antrean servis aset bermasalah, dan sinkronisasi kondisi.
           </p>
         </div>
         {isAdmin && (
           <button
             type="button"
             disabled={assets.length === 0}
-            onClick={openCreate}
-            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+            onClick={() => openCreate()}
+            className="px-4 py-2.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-50 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer self-start sm:self-auto shadow-xs"
           >
             <Plus className="w-4 h-4" />
             Catat Perawatan
@@ -142,10 +201,108 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
         )}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+      {/* KPI Strip */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="bg-white rounded-2xl border border-slate-200/90 px-4 py-3.5">
+          <div className="text-xs text-slate-500">Dijadwalkan</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-amber-600 mt-0.5">
+            {stats.scheduled}
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200/90 px-4 py-3.5">
+          <div className="text-xs text-slate-500">Dalam Proses</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-blue-600 mt-0.5">
+            {stats.inProgress}
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200/90 px-4 py-3.5">
+          <div className="text-xs text-slate-500">Selesai</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-emerald-700 mt-0.5">
+            {stats.completed}
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200/90 px-4 py-3.5">
+          <div className="text-xs text-slate-500">Aset Perlu Perhatian</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-rose-600 mt-0.5">
+            {stats.attentionCount}
+          </div>
+        </div>
+      </div>
+
+      {/* Assets Needing Maintenance Strip */}
+      {attentionAssets.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200/90 p-4">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+            <Wrench className="w-3.5 h-3.5 text-amber-600" />
+            Aset Prioritas Servis / Kondisi Tidak Baik ({attentionAssets.length})
+          </div>
+          <div className="divide-y divide-slate-100">
+            {attentionAssets.slice(0, 5).map((a) => (
+              <div
+                key={a.id}
+                className="py-2.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-800 truncate">
+                    [{a.code}] {a.name}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    Kondisi: <span className="font-medium text-amber-700">{a.condition}</span> ·{' '}
+                    {a.location}
+                    {a.nextMaintenanceDate ? ` · Jadwal servis: ${a.nextMaintenanceDate}` : ''}
+                  </div>
+                </div>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => openCreate(a.id)}
+                    className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold cursor-pointer self-start sm:self-auto shrink-0"
+                  >
+                    Buat Tiket Servis
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Search & Filter */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="relative w-full sm:w-64">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Cari perangkat, keluhan, teknisi..."
+            className="w-full pl-9 pr-3 py-2 rounded-xl bg-white border border-slate-200 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#2563eb]"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-200/60 rounded-xl">
+          {(['ALL', ...MAINTENANCE_STATUSES] as const).map((st) => (
+            <button
+              key={st}
+              type="button"
+              onClick={() => setStatusFilter(st)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                statusFilter === st
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {st === 'ALL' ? 'Semua' : st}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500">
+            <thead className="bg-slate-50 border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500">
               <tr>
                 <th className="px-4 py-3 font-semibold">Perangkat</th>
                 <th className="px-4 py-3 font-semibold">Keluhan & Tindakan</th>
@@ -156,14 +313,14 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {maintenances.length === 0 ? (
+              {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={isAdmin ? 6 : 5} className="px-4 py-10 text-center text-slate-500">
-                    Belum ada log perawatan perangkat.
+                    Tidak ada log perawatan yang sesuai.
                   </td>
                 </tr>
               ) : (
-                maintenances.map((m) => (
+                filtered.map((m) => (
                   <tr key={m.id} className="hover:bg-slate-50/70">
                     <td className="px-4 py-3">
                       <div className="font-semibold text-slate-900">{m.assetName}</div>
@@ -180,17 +337,46 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
                       <div className="font-mono text-xs text-slate-500">{m.maintenanceDate}</div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="inline-block px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700">
+                      <span
+                        className={`text-xs font-semibold ${
+                          m.status === 'Selesai'
+                            ? 'text-emerald-700'
+                            : m.status === 'Dalam Proses'
+                              ? 'text-blue-700'
+                              : 'text-amber-700'
+                        }`}
+                      >
                         {m.status}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-slate-700">{m.resultingCondition}</td>
                     {isAdmin && (
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">
+                          {m.status === 'Dijadwalkan' && (
+                            <button
+                              type="button"
+                              onClick={() => handleQuickStatus(m, 'Dalam Proses')}
+                              title="Mulai Proses"
+                              className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50 cursor-pointer"
+                            >
+                              <Play className="w-4 h-4" />
+                            </button>
+                          )}
+                          {m.status === 'Dalam Proses' && (
+                            <button
+                              type="button"
+                              onClick={() => handleQuickStatus(m, 'Selesai')}
+                              title="Tandai Selesai"
+                              className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 cursor-pointer"
+                            >
+                              <Check className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => openEdit(m)}
+                            title="Edit"
                             className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 cursor-pointer"
                           >
                             <Pencil className="w-4 h-4" />
@@ -198,6 +384,7 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
                           <button
                             type="button"
                             onClick={() => handleDelete(m)}
+                            title="Hapus"
                             className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -242,7 +429,7 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
                   >
                     {assets.map((a) => (
                       <option key={a.id} value={a.id}>
-                        [{a.code}] {a.name}
+                        [{a.code}] {a.name} ({a.condition})
                       </option>
                     ))}
                   </select>
@@ -346,7 +533,7 @@ export const MaintenancesTab: React.FC<MaintenancesTabProps> = ({
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-4 py-2 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white cursor-pointer"
+                  className="px-4 py-2 rounded-xl text-sm font-semibold bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-60 text-white cursor-pointer"
                 >
                   {saving ? 'Menyimpan...' : 'Simpan'}
                 </button>
