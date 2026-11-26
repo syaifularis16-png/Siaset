@@ -1,12 +1,20 @@
 import React, { useState } from 'react';
-import { ArrowRight, Building2, IdCard, LogOut, Monitor, Phone, ShieldCheck, User } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, LogOut } from 'lucide-react';
 import {
   completeSelfRegistration,
+  registerWithUsernamePassword,
   signInWithGoogle,
+  signInWithUsernameOrEmail,
   signOutFirebase,
 } from '../lib/firebaseBackend';
 import { formatApiError } from '../lib/api';
-import { DEFAULT_BRANDING, type BrandingSettings, type SystemRole, type UserPrivateInfo, type UserProfile } from '../types';
+import {
+  DEFAULT_BRANDING,
+  type BrandingSettings,
+  type SystemRole,
+  type UserPrivateInfo,
+  type UserProfile,
+} from '../types';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 interface AuthScreenProps {
@@ -30,15 +38,28 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   onAuthenticated,
   onCancelOnboarding,
 }) => {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+
+  // Login fields
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Registration / onboarding fields
   const [displayName, setDisplayName] = useState(onboardingUser?.displayName || '');
+  const [username, setUsername] = useState('');
   const [role, setRole] = useState<SystemRole>('guru');
   const [unit, setUnit] = useState('Lab Komputer Akuntansi');
   const [idNumber, setIdNumber] = useState('');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [showRegPassword, setShowRegPassword] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(initialNotice ?? null);
   const [unauthorizedHost, setUnauthorizedHost] = useState<string | null>(null);
+  const [needsEmailPasswordProvider, setNeedsEmailPasswordProvider] = useState(false);
 
   React.useEffect(() => {
     if (onboardingUser) {
@@ -52,25 +73,87 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     }
   }, [initialNotice]);
 
-  const handleGoogleSignIn = async () => {
+  const resetErrors = () => {
     setError(null);
     setUnauthorizedHost(null);
+    setNeedsEmailPasswordProvider(false);
+  };
+
+  const handleAuthException = (err: unknown, fallback: string) => {
+    const code = (err as { code?: string })?.code;
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      setError('Proses masuk dibatalkan.');
+    } else if (code === 'auth/unauthorized-domain') {
+      const host = typeof window !== 'undefined' ? window.location.hostname : '';
+      setUnauthorizedHost(host || 'domain-anda');
+      setError(
+        `Domain "${host}" belum didaftarkan di Firebase Authentication → Settings → Authorized domains.`
+      );
+    } else if (code === 'auth/operation-not-allowed') {
+      setNeedsEmailPasswordProvider(true);
+      setError(
+        'Metode login Email/Password belum diaktifkan di Firebase Console. Aktifkan terlebih dahulu atau gunakan Masuk dengan Google.'
+      );
+    } else if (
+      code === 'auth/invalid-credential' ||
+      code === 'auth/wrong-password' ||
+      code === 'auth/user-not-found'
+    ) {
+      setError('Nama pengguna atau kata sandi salah.');
+    } else if (code === 'auth/email-already-in-use') {
+      setError('Nama pengguna atau email tersebut sudah terdaftar.');
+    } else if (code === 'auth/weak-password') {
+      setError('Kata sandi minimal 6 karakter.');
+    } else if (code === 'auth/too-many-requests') {
+      setError('Terlalu banyak percobaan gagal. Silakan tunggu sebentar dan coba lagi.');
+    } else {
+      setError(formatApiError(err, fallback));
+    }
+  };
+
+  const handlePasswordLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    resetErrors();
+    setLoading(true);
+    try {
+      await signInWithUsernameOrEmail(identifier, password);
+    } catch (err) {
+      handleAuthException(err, 'Gagal masuk ke sistem.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    resetErrors();
+    setLoading(true);
+    try {
+      const res = await registerWithUsernamePassword({
+        displayName,
+        username,
+        password: regPassword,
+        role,
+        unit,
+        idNumber,
+        phone,
+        email,
+      });
+      onAuthenticated(res.profile, res.privateInfo);
+    } catch (err) {
+      handleAuthException(err, 'Gagal mendaftarkan akun.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    resetErrors();
     setLoading(true);
     try {
       await signInWithGoogle();
     } catch (err) {
-      const code = (err as { code?: string })?.code;
-      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-        setError('Proses masuk dibatalkan.');
-      } else if (code === 'auth/unauthorized-domain') {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        setUnauthorizedHost(host || 'domain-anda');
-        setError(
-          `Domain "${host}" belum didaftarkan di Firebase Authentication → Settings → Authorized domains.`
-        );
-      } else {
-        setError(formatApiError(err, 'Gagal masuk dengan Google.'));
-      }
+      handleAuthException(err, 'Gagal masuk dengan Google.');
     } finally {
       setLoading(false);
     }
@@ -78,7 +161,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
   const handleOnboardingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
+    resetErrors();
     setLoading(true);
     try {
       const res = await completeSelfRegistration({
@@ -97,181 +180,362 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   };
 
   const handleSwitchAccount = async () => {
-    setError(null);
+    resetErrors();
     await signOutFirebase();
     onCancelOnboarding?.();
   };
 
+  const headingTitle = onboardingUser
+    ? 'Lengkapi Profil Akun'
+    : mode === 'register'
+      ? 'Daftar Akun Baru'
+      : 'Masuk ke Sistem';
+
   return (
-    <div className="min-h-screen sipalak-auth-bg text-slate-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-slate-900/88 backdrop-blur-xl border border-white/12 rounded-2xl shadow-2xl overflow-hidden">
-        <div className="px-6 pt-7 pb-6 border-b border-white/10 bg-gradient-to-br from-slate-900/90 via-[#0f213a]/85 to-sky-950/60">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-11 h-11 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
-              <Monitor className="w-6 h-6" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-white">{branding.appName}</h1>
-              <p className="text-xs text-slate-400">{branding.schoolName}</p>
-            </div>
-          </div>
-          <p className="text-sm text-slate-300">
-            {onboardingUser
-              ? `Lengkapi profil untuk akun ${onboardingUser.email}`
-              : `${branding.appSubtitle} — Data tersimpan permanen lintas perangkat.`}
-          </p>
+    <div className="min-h-screen sipalak-auth-bg flex items-center justify-center p-4">
+      <div className="w-full max-w-[400px] bg-white rounded-2xl shadow-2xl border border-slate-200/80 p-7 sm:p-8 text-slate-900">
+        <div>
+          <h1 className="text-[22px] font-extrabold tracking-tight text-[#1a2b4c] leading-none">
+            {branding.appName}
+          </h1>
+          <h2 className="text-[19px] font-bold text-slate-900 mt-4 leading-snug">
+            {headingTitle}
+          </h2>
+          <p className="text-[13px] text-slate-500 mt-1.5 leading-snug">{branding.appSubtitle}</p>
+          <p className="text-[13px] text-slate-500 leading-snug">{branding.schoolName}</p>
         </div>
 
-        <div className="p-6">
-          {error && (
-            <div className="mb-4 rounded-xl bg-rose-500/10 border border-rose-500/30 px-3.5 py-2.5 text-sm text-rose-300 space-y-2">
-              <p>{error}</p>
-              {unauthorizedHost && (
-                <div className="text-xs text-rose-200/90 space-y-1 pt-1 border-t border-rose-500/20">
-                  <p>
-                    Tambahkan domain <span className="font-mono font-semibold">{unauthorizedHost}</span>{' '}
-                    pada project <span className="font-mono">{firebaseConfig.projectId}</span>:
-                  </p>
-                  <a
-                    href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-block underline text-sky-300 hover:text-sky-200 break-all"
-                  >
-                    Buka Firebase Console → Authentication → Settings
-                  </a>
-                </div>
-              )}
-            </div>
-          )}
-
-          {onboardingUser ? (
-            <form onSubmit={handleOnboardingSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Nama Lengkap *
-                </label>
-                <div className="relative">
-                  <User className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    required
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Nama lengkap Anda"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
+        {error && (
+          <div className="mt-4 rounded-xl bg-rose-50 border border-rose-200 px-3.5 py-2.5 text-xs text-rose-700 space-y-1.5">
+            <p className="font-medium leading-relaxed">{error}</p>
+            {unauthorizedHost && (
+              <div className="pt-1 border-t border-rose-200/80 space-y-1">
+                <p>
+                  Tambahkan <span className="font-mono font-semibold">{unauthorizedHost}</span> ke
+                  Authorized domains:
+                </p>
+                <a
+                  href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block underline font-medium text-blue-700 hover:text-blue-800 break-all"
+                >
+                  Buka Firebase Console → Authentication → Settings
+                </a>
               </div>
+            )}
+            {needsEmailPasswordProvider && (
+              <div className="pt-1 border-t border-rose-200/80 space-y-1">
+                <a
+                  href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/providers`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block underline font-medium text-blue-700 hover:text-blue-800 break-all"
+                >
+                  Aktifkan Email/Password di Firebase Console → Sign-in method
+                </a>
+              </div>
+            )}
+          </div>
+        )}
 
+        {onboardingUser ? (
+          <form onSubmit={handleOnboardingSubmit} className="mt-5 space-y-3.5">
+            <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+              Akun Google: <span className="font-medium text-slate-700">{onboardingUser.email}</span>
+            </p>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                Nama Lengkap *
+              </label>
+              <input
+                type="text"
+                required
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Nama lengkap Anda"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                Peran Akun *
+              </label>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as SystemRole)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 focus:outline-none focus:border-slate-900"
+              >
+                {SELF_ROLE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                Kelas / Unit *
+              </label>
+              <input
+                type="text"
+                required
+                value={unit}
+                onChange={(e) => setUnit(e.target.value)}
+                placeholder="cth. XI TKJ 1 / Lab Akuntansi"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  NIP / NIS
+                </label>
+                <input
+                  type="text"
+                  value={idNumber}
+                  onChange={(e) => setIdNumber(e.target.value)}
+                  placeholder="Opsional"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  No. Telepon
+                </label>
+                <input
+                  type="text"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="Opsional"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleSwitchAccount}
+                disabled={loading}
+                className="px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                Ganti Akun
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-60 text-white font-semibold text-sm transition-colors cursor-pointer"
+              >
+                {loading ? 'Menyimpan...' : 'Simpan & Masuk'}
+              </button>
+            </div>
+          </form>
+        ) : mode === 'register' ? (
+          <form onSubmit={handlePasswordRegister} className="mt-5 space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Nama Lengkap *
+              </label>
+              <input
+                type="text"
+                required
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Nama lengkap Anda"
+                className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Nama pengguna *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="cth. budi.guru"
+                  className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Peran Akun *
                 </label>
-                <div className="relative">
-                  <ShieldCheck className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <select
-                    value={role}
-                    onChange={(e) => setRole(e.target.value as SystemRole)}
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-indigo-500"
-                  >
-                    {SELF_ROLE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as SystemRole)}
+                  className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 focus:outline-none focus:border-slate-900"
+                >
+                  {SELF_ROLE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Kelas / Unit *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value)}
+                  placeholder="Lab / Kelas"
+                  className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Email (Opsional)
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="nama@sekolah.sch.id"
+                  className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Kata sandi *
+              </label>
+              <div className="relative">
+                <input
+                  type={showRegPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  value={regPassword}
+                  onChange={(e) => setRegPassword(e.target.value)}
+                  placeholder="Minimal 6 karakter"
+                  className="w-full pl-3.5 pr-10 py-2 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowRegPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-800 cursor-pointer"
+                  aria-label={showRegPassword ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'}
+                >
+                  {showRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 px-4 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-60 text-white font-semibold text-sm transition-colors cursor-pointer"
+            >
+              {loading ? 'Mendaftar...' : 'Daftar & Masuk'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                resetErrors();
+                setMode('login');
+              }}
+              className="w-full py-2 text-xs font-medium text-slate-600 hover:text-slate-900 inline-flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Kembali ke halaman Masuk
+            </button>
+          </form>
+        ) : (
+          <>
+            <form onSubmit={handlePasswordLogin} className="mt-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Nama pengguna
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoComplete="username"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  placeholder="admin"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-slate-900"
+                />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                  Kelas / Unit *
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Kata sandi
                 </label>
                 <div className="relative">
-                  <Building2 className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
-                    type="text"
+                    type={showPassword ? 'text' : 'password'}
                     required
-                    value={unit}
-                    onChange={(e) => setUnit(e.target.value)}
-                    placeholder="cth. XI TKJ 1 / Lab Akuntansi"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="•••••••"
+                    className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-white border border-slate-900 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900/15"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-700 hover:text-slate-950 cursor-pointer"
+                    aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    NIP / NIS
-                  </label>
-                  <div className="relative">
-                    <IdCard className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={idNumber}
-                      onChange={(e) => setIdNumber(e.target.value)}
-                      placeholder="Opsional"
-                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    No. Telepon
-                  </label>
-                  <div className="relative">
-                    <Phone className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="Opsional"
-                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleSwitchAccount}
-                  disabled={loading}
-                  className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <LogOut className="w-4 h-4" />
-                  Ganti Akun
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  {loading ? 'Menyimpan...' : 'Simpan & Masuk'}
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-2.5 px-4 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-60 text-white font-semibold text-sm transition-colors cursor-pointer"
+              >
+                {loading ? 'Memproses...' : 'Masuk'}
+              </button>
             </form>
-          ) : (
-            <div className="space-y-4">
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Masuk menggunakan akun Google Anda agar semua data inventaris, peminjaman, jadwal,
-                dan laporan tersimpan permanen serta dapat dibuka dari perangkat mana saja.
-              </p>
+
+            <div className="mt-5 rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 space-y-2.5 text-xs text-slate-600">
               <button
                 type="button"
                 disabled={loading}
                 onClick={handleGoogleSignIn}
-                className="w-full py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-semibold text-sm flex items-center justify-center gap-2.5 transition-colors cursor-pointer shadow-lg shadow-indigo-950/40"
+                className="w-full py-2 px-3 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer flex items-center justify-center gap-2"
               >
-                <span>{loading ? 'Memproses...' : 'Masuk'}</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>Masuk dengan Akun Google</span>
               </button>
+              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                <span>Belum punya akun pengguna?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetErrors();
+                    setMode('register');
+                  }}
+                  className="font-semibold text-[#2563eb] hover:text-[#1d4ed8] cursor-pointer"
+                >
+                  Daftar di sini
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed border-t border-slate-200/70 pt-2">
+                Semua data tersimpan permanen di Cloud Firestore dan tersinkronisasi lintas perangkat.
+              </p>
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -30,6 +30,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
   const [email, setEmail] = useState(privateInfo.email);
   const [phone, setPhone] = useState(privateInfo.phone);
   const [bio, setBio] = useState(profile.bio);
+  const [newPassword, setNewPassword] = useState('');
   const [saving, setSaving] = useState(false);
 
   const canChangeSelfRole =
@@ -47,10 +48,16 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
         email,
         phone,
         bio,
+        ...(newPassword ? { newPassword } : {}),
         ...(canChangeSelfRole ? { role } : {}),
       });
+      setNewPassword('');
       onProfileUpdated(res.profile, res.privateInfo);
-      onNotify('Profil Anda berhasil diperbarui.');
+      onNotify(
+        res.passwordUpdated
+          ? 'Profil dan kata sandi login Anda berhasil diperbarui.'
+          : 'Profil Anda berhasil diperbarui.'
+      );
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Gagal memperbarui profil.', 'error');
     } finally {
@@ -160,6 +167,23 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
             onChange={(e) => setBio(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
           />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-700 mb-1">
+            Kata Sandi Login (Opsional)
+          </label>
+          <input
+            type="password"
+            minLength={6}
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="Isi min. 6 karakter untuk mengatur / mengubah kata sandi masuk"
+            className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+          />
+          <p className="text-[11px] text-slate-400 mt-1">
+            Jika diisi, Anda dapat masuk memakai Username ({username || 'username'}) beserta kata sandi ini dari perangkat mana saja.
+          </p>
         </div>
 
         <div className="pt-2 flex justify-end">

@@ -44,7 +44,7 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isBootstrappedAdmin() || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+      return isBootstrappedAdmin() || (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
     }
 
     function isValidRole(role) {
@@ -222,19 +222,19 @@ service cloud.firestore {
     match /username_auth/{usernameKey} {
       allow get: if isValidUsernameKey(usernameKey);
       allow list: if false;
-      allow create: if isVerifiedUser()
+      allow create: if isSignedIn()
         && isValidUsernameKey(usernameKey)
         && isValidUsernameAuth(incoming())
         && (incoming().uid == request.auth.uid || isAdmin())
         && incoming().updatedAt == request.time;
-      allow update: if isVerifiedUser()
+      allow update: if isSignedIn()
         && isValidUsernameKey(usernameKey)
         && isValidUsernameAuth(incoming())
         && incoming().uid == existing().uid
         && (existing().uid == request.auth.uid || isAdmin())
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['salt', 'iv', 'encryptedEmail', 'updatedAt']);
-      allow delete: if isVerifiedUser()
+      allow delete: if isSignedIn()
         && isValidUsernameKey(usernameKey)
         && (existing().uid == request.auth.uid || isAdmin());
     }
@@ -272,9 +272,9 @@ service cloud.firestore {
 
     // Collection: users (Non-PII operational profile)
     match /users/{userId} {
-      allow get: if isVerifiedUser() && isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isVerifiedUser() && (existing().uid == request.auth.uid || isAdmin());
-      allow create: if isVerifiedUser()
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow create: if isSignedIn()
         && isValidId(userId)
         && isValidUserProfile(incoming())
         && incoming().uid == userId
@@ -283,6 +283,7 @@ service cloud.firestore {
         && (
           (isOwner(userId) && !('inviteId' in incoming()) && isValidSelfRole(incoming().role) && incoming().active == true)
           || (isOwner(userId)
+            && isVerifiedUser()
             && ('inviteId' in incoming())
             && isValidId(incoming().inviteId)
             && exists(/databases/$(database)/documents/user_invites/$(incoming().inviteId))
@@ -292,7 +293,7 @@ service cloud.firestore {
             && incoming().active == get(/databases/$(database)/documents/user_invites/$(incoming().inviteId)).data.active)
           || isAdmin()
         );
-      allow update: if isVerifiedUser()
+      allow update: if isSignedIn()
         && isValidId(userId)
         && isValidUserProfile(incoming())
         && incoming().uid == existing().uid
@@ -312,16 +313,16 @@ service cloud.firestore {
 
       // Subcollection: private PII (email, phone)
       match /private/{docId} {
-        allow get: if isVerifiedUser() && isValidId(userId) && docId == 'info' && (isOwner(userId) || isAdmin());
+        allow get: if isSignedIn() && isValidId(userId) && docId == 'info' && (isOwner(userId) || isAdmin());
         allow list: if false;
-        allow create: if isVerifiedUser()
+        allow create: if isSignedIn()
           && isValidId(userId)
           && docId == 'info'
           && isValidUserPrivateInfo(incoming())
           && incoming().uid == userId
           && incoming().updatedAt == request.time
           && (isOwner(userId) || isAdmin());
-        allow update: if isVerifiedUser()
+        allow update: if isSignedIn()
           && isValidId(userId)
           && docId == 'info'
           && isValidUserPrivateInfo(incoming())
@@ -335,9 +336,9 @@ service cloud.firestore {
 
     // Collection: admins
     match /admins/{userId} {
-      allow get: if isVerifiedUser() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow get: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
-      allow create: if isVerifiedUser()
+      allow create: if isSignedIn()
         && isValidId(userId)
         && isValidAdminRecord(incoming())
         && incoming().uid == userId
@@ -345,6 +346,7 @@ service cloud.firestore {
         && (
           (isAdmin() && incoming().grantedBy == request.auth.uid)
           || (isOwner(userId)
+            && isVerifiedUser()
             && exists(/databases/$(database)/documents/users/$(userId))
             && get(/databases/$(database)/documents/users/$(userId)).data.role == 'admin'
             && ('inviteId' in get(/databases/$(database)/documents/users/$(userId)).data)
@@ -356,8 +358,8 @@ service cloud.firestore {
 
     // Collection: assets (Inventaris)
     match /assets/{assetId} {
-      allow get: if isVerifiedUser() && isValidId(assetId);
-      allow list: if isVerifiedUser() && existing().labScope == 'smkn1sambeng';
+      allow get: if isSignedIn() && isValidId(assetId);
+      allow list: if isSignedIn() && existing().labScope == 'smkn1sambeng';
       allow create: if isAdmin()
         && isValidId(assetId)
         && isValidAsset(incoming())
@@ -376,9 +378,9 @@ service cloud.firestore {
 
     // Collection: loans (Peminjaman)
     match /loans/{loanId} {
-      allow get: if isVerifiedUser() && isValidId(loanId) && (existing().requesterId == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (existing().requesterId == request.auth.uid || isAdmin());
-      allow create: if isVerifiedUser()
+      allow get: if isSignedIn() && isValidId(loanId) && (existing().requesterId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().requesterId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn()
         && isValidId(loanId)
         && isValidLoan(incoming())
         && incoming().requesterId == request.auth.uid
@@ -386,7 +388,7 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && exists(/databases/$(database)/documents/assets/$(incoming().assetId));
-      allow update: if isVerifiedUser()
+      allow update: if isSignedIn()
         && isValidId(loanId)
         && isValidLoan(incoming())
         && incoming().assetId == existing().assetId
@@ -401,21 +403,21 @@ service cloud.firestore {
             && incoming().status == 'Menunggu'
             && incoming().diff(existing()).affectedKeys().hasOnly(['borrowDate', 'returnDate', 'lessonPeriod', 'borrowTime', 'returnTime', 'purpose', 'notes', 'updatedAt']))
         );
-      allow delete: if isValidId(loanId) && (isAdmin() || (isVerifiedUser() && existing().requesterId == request.auth.uid && existing().status == 'Menunggu'));
+      allow delete: if isValidId(loanId) && (isAdmin() || (isSignedIn() && existing().requesterId == request.auth.uid && existing().status == 'Menunggu'));
     }
 
     // Collection: schedules (Jadwal Lab)
     match /schedules/{scheduleId} {
-      allow get: if isVerifiedUser() && isValidId(scheduleId);
-      allow list: if isVerifiedUser() && existing().labScope == 'smkn1sambeng';
-      allow create: if isVerifiedUser()
+      allow get: if isSignedIn() && isValidId(scheduleId);
+      allow list: if isSignedIn() && existing().labScope == 'smkn1sambeng';
+      allow create: if isSignedIn()
         && isValidId(scheduleId)
         && isValidSchedule(incoming())
         && incoming().requesterId == request.auth.uid
         && incoming().status == 'Menunggu'
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isVerifiedUser()
+      allow update: if isSignedIn()
         && isValidId(scheduleId)
         && isValidSchedule(incoming())
         && incoming().requesterId == existing().requesterId
@@ -429,13 +431,13 @@ service cloud.firestore {
             && incoming().status == 'Menunggu'
             && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'startTime', 'endTime', 'activity', 'unit', 'updatedAt']))
         );
-      allow delete: if isValidId(scheduleId) && (isAdmin() || (isVerifiedUser() && existing().requesterId == request.auth.uid && existing().status == 'Menunggu'));
+      allow delete: if isValidId(scheduleId) && (isAdmin() || (isSignedIn() && existing().requesterId == request.auth.uid && existing().status == 'Menunggu'));
     }
 
     // Collection: maintenances (Maintenance)
     match /maintenances/{maintenanceId} {
-      allow get: if isVerifiedUser() && isValidId(maintenanceId) && (existing().createdBy == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (existing().createdBy == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && isValidId(maintenanceId) && (existing().createdBy == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().createdBy == request.auth.uid || isAdmin());
       allow create: if isAdmin()
         && isValidId(maintenanceId)
         && isValidMaintenance(incoming())
@@ -456,15 +458,15 @@ service cloud.firestore {
 
     // Collection: attendances (Absensi)
     match /attendances/{attendanceId} {
-      allow get: if isVerifiedUser() && isValidId(attendanceId) && (existing().userId == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (existing().userId == request.auth.uid || isAdmin());
-      allow create: if isVerifiedUser()
+      allow get: if isSignedIn() && isValidId(attendanceId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn()
         && isValidId(attendanceId)
         && isValidAttendance(incoming())
         && incoming().userId == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isVerifiedUser()
+      allow update: if isSignedIn()
         && isValidId(attendanceId)
         && isValidAttendance(incoming())
         && incoming().userId == existing().userId

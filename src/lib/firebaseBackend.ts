@@ -1,4 +1,13 @@
-import { signInWithPopup, signOut, type User } from 'firebase/auth';
+import {
+  createUserWithEmailAndPassword,
+  EmailAuthProvider,
+  linkWithCredential,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  updatePassword,
+  type User,
+} from 'firebase/auth';
 import {
   addDoc,
   collection,
@@ -17,7 +26,14 @@ import {
   type DocumentData,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { auth, db, googleProvider, handleFirestoreError, OperationType } from './firebase';
+import {
+  auth,
+  db,
+  getSecondaryAuth,
+  googleProvider,
+  handleFirestoreError,
+  OperationType,
+} from './firebase';
 import {
   ASSET_CATEGORIES,
   ASSET_CONDITIONS,
@@ -71,6 +87,113 @@ function sanitizeUsername(val: unknown): string {
     .toLowerCase()
     .replace(/[^a-z0-9._-]/g, '')
     .slice(0, 40);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+async function deriveEnvelopeKey(
+  usernameKey: string,
+  password: string,
+  salt: Uint8Array
+): Promise<CryptoKey> {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(`${usernameKey}:${password}`),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: toArrayBuffer(salt),
+      iterations: 100000,
+      hash: 'SHA-256',
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptEmailEnvelope(
+  usernameKey: string,
+  password: string,
+  email: string
+): Promise<{ salt: string; iv: string; encryptedEmail: string }> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveEnvelopeKey(usernameKey, password, salt);
+  const cipherBuf = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+    key,
+    new TextEncoder().encode(email)
+  );
+  return {
+    salt: bytesToBase64(salt),
+    iv: bytesToBase64(iv),
+    encryptedEmail: bytesToBase64(new Uint8Array(cipherBuf)),
+  };
+}
+
+async function decryptEmailEnvelope(
+  usernameKey: string,
+  password: string,
+  envelope: { salt: string; iv: string; encryptedEmail: string }
+): Promise<string> {
+  const salt = base64ToBytes(envelope.salt);
+  const iv = base64ToBytes(envelope.iv);
+  const cipher = base64ToBytes(envelope.encryptedEmail);
+  const key = await deriveEnvelopeKey(usernameKey, password, salt);
+  const plainBuf = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+    key,
+    toArrayBuffer(cipher)
+  );
+  return new TextDecoder().decode(plainBuf);
+}
+
+async function upsertUsernameEnvelope(
+  uid: string,
+  usernameKey: string,
+  password: string,
+  email: string
+): Promise<void> {
+  if (!usernameKey) return;
+  const envRef = doc(db, 'username_auth', usernameKey);
+  const existing = await getDoc(envRef);
+  if (existing.exists() && existing.data().uid !== uid) {
+    throw new Error(`Nama pengguna "${usernameKey}" sudah digunakan oleh akun lain.`);
+  }
+  const encrypted = await encryptEmailEnvelope(usernameKey, password, email);
+  await setDoc(envRef, {
+    uid,
+    salt: encrypted.salt,
+    iv: encrypted.iv,
+    encryptedEmail: encrypted.encryptedEmail,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 function toIsoString(val: unknown): string {
@@ -252,7 +375,7 @@ function requireCurrentUser(): User {
 
 async function getCurrentUserRole(uid: string): Promise<SystemRole> {
   const email = (auth.currentUser?.email || '').toLowerCase();
-  if (BOOTSTRAP_ADMIN_EMAILS.has(email)) return 'admin';
+  if (auth.currentUser?.emailVerified && BOOTSTRAP_ADMIN_EMAILS.has(email)) return 'admin';
   const userPath = `users/${uid}`;
   try {
     const snap = await getDoc(doc(db, 'users', uid));
@@ -271,6 +394,148 @@ export async function signInWithGoogle(): Promise<User> {
   return res.user;
 }
 
+export async function signInWithUsernameOrEmail(
+  identifier: string,
+  password: string
+): Promise<User> {
+  const raw = identifier.trim();
+  if (!raw || !password) {
+    throw new Error('Nama pengguna dan kata sandi wajib diisi.');
+  }
+
+  let loginEmail = '';
+  if (raw.includes('@')) {
+    loginEmail = raw.toLowerCase();
+  } else {
+    const usernameKey = sanitizeUsername(raw);
+    if (!usernameKey) {
+      throw new Error('Format nama pengguna tidak valid.');
+    }
+    let envSnap;
+    try {
+      envSnap = await getDoc(doc(db, 'username_auth', usernameKey));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, `username_auth/${usernameKey}`);
+    }
+    if (!envSnap.exists()) {
+      throw new Error('Nama pengguna tidak ditemukan atau belum memiliki kata sandi.');
+    }
+    const envData = envSnap.data();
+    try {
+      loginEmail = await decryptEmailEnvelope(usernameKey, password, {
+        salt: String(envData.salt ?? ''),
+        iv: String(envData.iv ?? ''),
+        encryptedEmail: String(envData.encryptedEmail ?? ''),
+      });
+    } catch {
+      throw new Error('Nama pengguna atau kata sandi salah.');
+    }
+  }
+
+  const res = await signInWithEmailAndPassword(auth, loginEmail, password);
+  return res.user;
+}
+
+let activeRegistrationPromise: Promise<unknown> | null = null;
+
+export async function registerWithUsernamePassword(input: {
+  displayName: string;
+  username: string;
+  password: string;
+  role: SystemRole;
+  unit: string;
+  idNumber?: string;
+  phone?: string;
+  email?: string;
+}): Promise<{ profile: UserProfile; privateInfo: UserPrivateInfo }> {
+  const displayName = clampStr(input.displayName, 80);
+  const usernameKey = sanitizeUsername(input.username);
+  const password = input.password;
+  const role: SystemRole = ALLOWED_SELF_ROLES.has(input.role) ? input.role : 'guru';
+  const unit = clampStr(input.unit, 60);
+  const idNumber = clampStr(input.idNumber ?? '', 40);
+  const phone = clampStr(input.phone ?? '', 30);
+  const optionalEmail = clampStr(input.email ?? '', 120).toLowerCase();
+
+  if (!displayName) throw new Error('Nama lengkap wajib diisi.');
+  if (!usernameKey) {
+    throw new Error('Nama pengguna wajib diisi (huruf kecil, angka, titik, atau strip).');
+  }
+  if (!password || password.length < 6) {
+    throw new Error('Kata sandi minimal 6 karakter.');
+  }
+
+  const envRef = doc(db, 'username_auth', usernameKey);
+  const existingEnv = await getDoc(envRef);
+  if (existingEnv.exists()) {
+    throw new Error(`Nama pengguna "${usernameKey}" sudah digunakan.`);
+  }
+
+  const authEmail =
+    optionalEmail && optionalEmail.includes('@')
+      ? optionalEmail
+      : `${usernameKey}@sipalak.smkn1sambeng.local`;
+
+  const task = (async () => {
+    const cred = await createUserWithEmailAndPassword(auth, authEmail, password);
+    const uid = cred.user.uid;
+    const userDocRef = doc(db, 'users', uid);
+    const privateDocRef = doc(db, 'users', uid, 'private', 'info');
+
+    try {
+      await setDoc(userDocRef, {
+        uid,
+        displayName,
+        username: usernameKey,
+        role,
+        unit,
+        idNumber,
+        bio: '',
+        active: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `users/${uid}`);
+    }
+
+    try {
+      await setDoc(privateDocRef, {
+        uid,
+        email: optionalEmail || authEmail,
+        phone,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `users/${uid}/private/info`);
+    }
+
+    try {
+      await upsertUsernameEnvelope(uid, usernameKey, password, authEmail);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `username_auth/${usernameKey}`);
+    }
+
+    const [freshSnap, freshPriv] = await Promise.all([getDoc(userDocRef), getDoc(privateDocRef)]);
+    return {
+      profile: mapUserProfileDoc(uid, freshSnap.data() ?? {}),
+      privateInfo: mapUserPrivateDoc(
+        uid,
+        freshPriv.data() ?? { email: optionalEmail || authEmail, phone }
+      ),
+    };
+  })();
+
+  activeRegistrationPromise = task;
+  try {
+    return await task;
+  } finally {
+    if (activeRegistrationPromise === task) {
+      activeRegistrationPromise = null;
+    }
+  }
+}
+
 export async function signOutFirebase(): Promise<void> {
   await signOut(auth);
 }
@@ -280,6 +545,9 @@ export type SessionResolution =
   | { status: 'needs_onboarding'; email: string; displayName: string };
 
 export async function resolveFirebaseSession(user: User): Promise<SessionResolution> {
+  if (activeRegistrationPromise) {
+    await activeRegistrationPromise.catch(() => {});
+  }
   const uid = user.uid;
   const email = (user.email || '').trim().toLowerCase();
   const userDocRef = doc(db, 'users', uid);
@@ -332,8 +600,8 @@ export async function resolveFirebaseSession(user: User): Promise<SessionResolut
     return { status: 'ready', profile, privateInfo };
   }
 
-  // First-time user: check bootstrapped admin
-  if (BOOTSTRAP_ADMIN_EMAILS.has(email)) {
+  // First-time user: check bootstrapped admin (verified email only)
+  if (user.emailVerified && BOOTSTRAP_ADMIN_EMAILS.has(email)) {
     const displayName = clampStr(user.displayName || 'Administrator Lab', 80);
     const username = sanitizeUsername(email.split('@')[0] || 'admin');
     try {
@@ -383,8 +651,8 @@ export async function resolveFirebaseSession(user: User): Promise<SessionResolut
     };
   }
 
-  // Check unclaimed pre-registered invite matching email
-  if (email) {
+  // Check unclaimed pre-registered invite matching verified email
+  if (user.emailVerified && email) {
     let inviteSnapList;
     try {
       inviteSnapList = await getDocs(
@@ -868,13 +1136,45 @@ export async function updateOwnProfile(payload: Record<string, unknown>): Promis
     handleFirestoreError(err, OperationType.WRITE, `users/${uid}/private/info`);
   }
 
+  let passwordUpdated = false;
+  const newPassword = typeof payload.newPassword === 'string' ? payload.newPassword : '';
+  if (newPassword) {
+    if (newPassword.length < 6) {
+      throw new Error('Kata sandi baru minimal 6 karakter.');
+    }
+    const authEmail = (user.email || email || '').trim().toLowerCase();
+    if (!authEmail) {
+      throw new Error('Akun ini belum memiliki alamat email untuk login kata sandi.');
+    }
+    const hasPasswordProvider = user.providerData.some((p) => p.providerId === 'password');
+    if (hasPasswordProvider) {
+      await updatePassword(user, newPassword);
+    } else {
+      const cred = EmailAuthProvider.credential(authEmail, newPassword);
+      await linkWithCredential(user, cred);
+    }
+
+    const activeUsername = sanitizeUsername(username || current.username || authEmail.split('@')[0]);
+    if (activeUsername) {
+      if (current.username && current.username !== activeUsername) {
+        const oldRef = doc(db, 'username_auth', current.username);
+        const oldSnap = await getDoc(oldRef);
+        if (oldSnap.exists() && oldSnap.data().uid === uid) {
+          await deleteDoc(oldRef).catch(() => {});
+        }
+      }
+      await upsertUsernameEnvelope(uid, activeUsername, newPassword, authEmail);
+    }
+    passwordUpdated = true;
+  }
+
   const [updatedUserSnap, updatedPrivSnap] = await Promise.all([
     getDoc(userDocRef),
     getDoc(privateDocRef),
   ]);
 
   return {
-    passwordUpdated: false,
+    passwordUpdated,
     profile: mapUserProfileDoc(uid, updatedUserSnap.data() ?? {}),
     privateInfo: mapUserPrivateDoc(uid, updatedPrivSnap.data() ?? {}),
   };
@@ -1516,7 +1816,8 @@ export async function handleFirebaseApiRequest<T>(
     if (!isAdmin) throw new Error('Hanya Administrator Lab yang dapat menambah pengguna.');
     const email = clampStr(body.email, 120).toLowerCase();
     const displayName = clampStr(body.displayName, 80);
-    const username = sanitizeUsername(body.username || email.split('@')[0]);
+    const username = sanitizeUsername(body.username || (email ? email.split('@')[0] : ''));
+    const password = typeof body.password === 'string' ? body.password : '';
     const targetRole = String(body.role || 'guru') as SystemRole;
     const unit = clampStr(body.unit, 60);
     const idNumber = clampStr(body.idNumber, 40);
@@ -1524,8 +1825,100 @@ export async function handleFirebaseApiRequest<T>(
     const bio = clampStr(body.bio, 240);
     const active = body.active !== false;
 
-    if (!displayName || !email || !email.includes('@') || !ALLOWED_ROLES.has(targetRole)) {
-      throw new Error('Nama lengkap dan email Google yang valid wajib diisi.');
+    if (!displayName || !ALLOWED_ROLES.has(targetRole)) {
+      throw new Error('Nama lengkap dan peran akses wajib diisi.');
+    }
+
+    if (password) {
+      if (password.length < 6) {
+        throw new Error('Password minimal 6 karakter.');
+      }
+      if (!username) {
+        throw new Error('Username wajib diisi jika akun dibuat dengan password.');
+      }
+      const envRef = doc(db, 'username_auth', username);
+      const existingEnv = await getDoc(envRef);
+      if (existingEnv.exists()) {
+        throw new Error(`Username "${username}" sudah digunakan.`);
+      }
+
+      const authEmail =
+        email && email.includes('@') ? email : `${username}@sipalak.smkn1sambeng.local`;
+
+      let newUid = '';
+      const secondaryAuth = getSecondaryAuth();
+      try {
+        const cred = await createUserWithEmailAndPassword(secondaryAuth, authEmail, password);
+        newUid = cred.user.uid;
+      } catch (err) {
+        const code = (err as { code?: string })?.code;
+        if (code === 'auth/operation-not-allowed') {
+          throw new Error(
+            'Metode Email/Password belum diaktifkan di Firebase Console (Authentication → Sign-in method → Email/Password).'
+          );
+        }
+        if (code === 'auth/email-already-in-use') {
+          throw new Error('Email atau username tersebut sudah terdaftar pada autentikasi.');
+        }
+        if (code === 'auth/weak-password') {
+          throw new Error('Password minimal 6 karakter.');
+        }
+        throw err;
+      } finally {
+        await signOut(secondaryAuth).catch(() => {});
+      }
+
+      try {
+        await setDoc(doc(db, 'users', newUid), {
+          uid: newUid,
+          displayName,
+          username,
+          role: targetRole,
+          unit,
+          idNumber,
+          bio,
+          active,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `users/${newUid}`);
+      }
+
+      try {
+        await setDoc(doc(db, 'users', newUid, 'private', 'info'), {
+          uid: newUid,
+          email: email || authEmail,
+          phone,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `users/${newUid}/private/info`);
+      }
+
+      if (targetRole === 'admin') {
+        try {
+          await setDoc(doc(db, 'admins', newUid), {
+            uid: newUid,
+            grantedBy: uid,
+            createdAt: serverTimestamp(),
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.CREATE, `admins/${newUid}`);
+        }
+      }
+
+      try {
+        await upsertUsernameEnvelope(newUid, username, password, authEmail);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, `username_auth/${username}`);
+      }
+
+      return { id: newUid, createdDirect: true } as T;
+    }
+
+    if (!email || !email.includes('@')) {
+      throw new Error('Isi Password (min. 6 karakter) atau Email Google yang valid.');
     }
 
     try {
@@ -1552,7 +1945,7 @@ export async function handleFirebaseApiRequest<T>(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      return { id: ref.id } as T;
+      return { id: ref.id, createdDirect: false } as T;
     } catch (err) {
       if (err instanceof Error && err.message.includes('sudah terdaftar')) throw err;
       handleFirestoreError(err, OperationType.CREATE, 'user_invites');
@@ -1578,10 +1971,16 @@ export async function handleFirebaseApiRequest<T>(
       body.idNumber !== undefined ? clampStr(body.idNumber, 40) : String(existing.idNumber ?? '');
     const bio = body.bio !== undefined ? clampStr(body.bio, 240) : String(existing.bio ?? '');
     const active = body.active !== undefined ? Boolean(body.active) : existing.active !== false;
+    const newPassword = typeof body.password === 'string' ? body.password : '';
 
     if (!ALLOWED_ROLES.has(targetRole)) throw new Error('Peran tidak valid.');
     if (targetUid === uid && (!active || targetRole !== 'admin')) {
       throw new Error('Anda tidak dapat menonaktifkan atau menurunkan peran akun sendiri.');
+    }
+    if (newPassword && targetUid !== uid) {
+      throw new Error(
+        'Password akun lain hanya dapat diatur saat pembuatan akun atau diubah oleh pemiliknya di Profil Saya.'
+      );
     }
 
     try {
@@ -1612,8 +2011,31 @@ export async function handleFirebaseApiRequest<T>(
         });
       }
 
+      if (newPassword && targetUid === uid) {
+        if (newPassword.length < 6) {
+          throw new Error('Password baru minimal 6 karakter.');
+        }
+        const authEmail = (user.email || '').trim().toLowerCase();
+        if (!authEmail) {
+          throw new Error('Email akun tidak ditemukan.');
+        }
+        const hasPasswordProvider = user.providerData.some((p) => p.providerId === 'password');
+        if (hasPasswordProvider) {
+          await updatePassword(user, newPassword);
+        } else {
+          await linkWithCredential(user, EmailAuthProvider.credential(authEmail, newPassword));
+        }
+        const activeUsername = sanitizeUsername(
+          username || String(existing.username ?? '') || authEmail.split('@')[0]
+        );
+        if (activeUsername) {
+          await upsertUsernameEnvelope(uid, activeUsername, newPassword, authEmail);
+        }
+      }
+
       return { ok: true } as T;
     } catch (err) {
+      if (err instanceof Error && !err.message.startsWith('{')) throw err;
       handleFirestoreError(err, OperationType.UPDATE, `users/${targetUid}`);
     }
   }
@@ -1623,6 +2045,16 @@ export async function handleFirebaseApiRequest<T>(
     const targetUid = path.slice('/api/users/'.length);
     if (targetUid === uid) throw new Error('Tidak dapat menghapus akun sendiri.');
     try {
+      const targetUserSnap = await getDoc(doc(db, 'users', targetUid));
+      const targetUsername = targetUserSnap.exists()
+        ? sanitizeUsername(targetUserSnap.data().username)
+        : '';
+      if (targetUsername) {
+        const envSnap = await getDoc(doc(db, 'username_auth', targetUsername));
+        if (envSnap.exists() && envSnap.data().uid === targetUid) {
+          await deleteDoc(doc(db, 'username_auth', targetUsername)).catch(() => {});
+        }
+      }
       await deleteDoc(doc(db, 'users', targetUid, 'private', 'info')).catch(() => {});
       await deleteDoc(doc(db, 'admins', targetUid)).catch(() => {});
       await deleteDoc(doc(db, 'users', targetUid));

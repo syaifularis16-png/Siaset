@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserPlus, Pencil, Trash2, X } from 'lucide-react';
+import { Eye, EyeOff, Pencil, Trash2, UserPlus, X } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { SYSTEM_ROLES, type SystemRole, type UserInvite, type UserProfile } from '../types';
 
@@ -23,6 +23,8 @@ export const UsersTab: React.FC<UsersTabProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<SystemRole>('guru');
   const [unit, setUnit] = useState('');
   const [idNumber, setIdNumber] = useState('');
@@ -37,6 +39,8 @@ export const UsersTab: React.FC<UsersTabProps> = ({
     setEditingId(null);
     setDisplayName('');
     setUsername('');
+    setPassword('');
+    setShowPassword(false);
     setRole('guru');
     setUnit('');
     setIdNumber('');
@@ -52,6 +56,8 @@ export const UsersTab: React.FC<UsersTabProps> = ({
     setEditingId(u.uid);
     setDisplayName(u.displayName);
     setUsername(u.username);
+    setPassword('');
+    setShowPassword(false);
     setRole(u.role);
     setUnit(u.unit);
     setIdNumber(u.idNumber);
@@ -67,6 +73,8 @@ export const UsersTab: React.FC<UsersTabProps> = ({
     setEditingId(inv.id);
     setDisplayName(inv.displayName);
     setUsername(inv.username);
+    setPassword('');
+    setShowPassword(false);
     setRole(inv.role);
     setUnit(inv.unit);
     setIdNumber(inv.idNumber);
@@ -92,6 +100,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
             idNumber,
             bio,
             active,
+            ...(editingId === currentUserId && password ? { password } : {}),
           }),
         });
         onNotify('Akun pengguna berhasil diperbarui.');
@@ -111,11 +120,12 @@ export const UsersTab: React.FC<UsersTabProps> = ({
         });
         onNotify('Undangan akun berhasil diperbarui.');
       } else {
-        await apiFetch('/api/users', {
+        const res = await apiFetch<{ id: string; createdDirect?: boolean }>('/api/users', {
           method: 'POST',
           body: JSON.stringify({
             displayName,
             username,
+            password,
             role,
             unit,
             idNumber,
@@ -125,7 +135,11 @@ export const UsersTab: React.FC<UsersTabProps> = ({
             active,
           }),
         });
-        onNotify('Undangan akun berhasil ditambahkan. Pengguna dapat masuk dengan akun Google tersebut.');
+        onNotify(
+          res.createdDirect
+            ? `Akun ${displayName} berhasil dibuat dan langsung dapat masuk menggunakan username & password.`
+            : 'Undangan akun berhasil ditambahkan. Pengguna dapat masuk dengan akun Google tersebut.'
+        );
       }
       setModalOpen(false);
       await onRefresh();
@@ -156,6 +170,9 @@ export const UsersTab: React.FC<UsersTabProps> = ({
     }
   };
 
+  const isEditingOwnUser = editingKind === 'user' && editingId === currentUserId;
+  const isEditingOtherUser = editingKind === 'user' && editingId !== currentUserId;
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -184,6 +201,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                 <th className="px-4 py-3 font-semibold">Peran</th>
                 <th className="px-4 py-3 font-semibold">Unit / Kelas</th>
                 <th className="px-4 py-3 font-semibold">NIP / NIS</th>
+                <th className="px-4 py-3 font-semibold">Password</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
                 <th className="px-4 py-3 font-semibold text-right">Aksi</th>
               </tr>
@@ -201,6 +219,13 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                   <td className="px-4 py-3 text-slate-600">{u.unit || '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-600">
                     {u.idNumber || '—'}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-slate-600">
+                    {u.username ? (
+                      <span className="font-mono tracking-wider text-slate-700">••••••</span>
+                    ) : (
+                      <span className="text-slate-400">Login Google</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span
@@ -246,6 +271,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                   <td className="px-4 py-3 font-mono text-xs text-slate-600">
                     {inv.idNumber || '—'}
                   </td>
+                  <td className="px-4 py-3 text-xs text-slate-400">Belum diatur</td>
                   <td className="px-4 py-3">
                     <span className="inline-block px-2.5 py-0.5 rounded-md text-xs font-medium border bg-amber-50 text-amber-700 border-amber-200">
                       Menunggu Login Google
@@ -295,7 +321,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="p-5 space-y-3.5">
+            <form onSubmit={handleSubmit} className="p-5 space-y-3.5 max-h-[82vh] overflow-y-auto">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
@@ -311,12 +337,14 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Username (Opsional)
+                    Username {!editingKind && password ? '*' : '(Opsional)'}
                   </label>
                   <input
                     type="text"
+                    required={!editingKind && Boolean(password)}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    placeholder="cth. budi.guru"
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono"
                   />
                 </div>
@@ -339,11 +367,11 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                 {!editingKind && (
                   <div>
                     <label className="block text-xs font-medium text-slate-700 mb-1">
-                      Email Google *
+                      Email Google {!password ? '*' : '(Opsional)'}
                     </label>
                     <input
                       type="email"
-                      required
+                      required={!password}
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="nama@guru.sma.belajar.id"
@@ -364,6 +392,67 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                     />
                   </div>
                 )}
+
+                {(!editingKind || isEditingOwnUser) && (
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      {isEditingOwnUser
+                        ? 'Password Baru (Opsional)'
+                        : 'Password (Min. 6 karakter)'}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        minLength={6}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder={
+                          isEditingOwnUser
+                            ? 'Kosongkan jika tidak ingin mengubah password'
+                            : 'Isi agar akun bisa langsung login dengan Username + Password'
+                        }
+                        className="w-full pl-3 pr-10 py-2 rounded-xl border border-slate-200 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-800 cursor-pointer"
+                        aria-label={showPassword ? 'Sembunyikan password' : 'Lihat password'}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                    {!editingKind && (
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Jika password diisi, akun langsung aktif tanpa perlu login Google. Jika
+                        dikosongkan, pengguna akan masuk memakai Email Google.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {isEditingOtherUser && (
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      Password
+                    </label>
+                    <input
+                      type="password"
+                      disabled
+                      value="••••••••"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-400"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Demi keamanan, password akun lain hanya dapat diatur saat pembuatan akun atau
+                      diubah oleh pemiliknya di menu Profil Saya.
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     Unit / Kelas
@@ -385,7 +474,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                   />
                 </div>
                 {editingKind !== 'user' && (
-                  <div>
+                  <div className="sm:col-span-2">
                     <label className="block text-xs font-medium text-slate-700 mb-1">
                       No. Telepon
                     </label>
