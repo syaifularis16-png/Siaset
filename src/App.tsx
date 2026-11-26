@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import {
   LayoutGrid,
   Monitor,
@@ -15,18 +16,13 @@ import {
   Shield,
   Pencil,
 } from 'lucide-react';
+import { authApi, formatApiError } from './lib/api';
+import { auth } from './lib/firebase';
 import {
-  ApiError,
-  authApi,
-  brandingApi,
-  getBackendMode,
-  getStoredToken,
-  getWsUrl,
-  probeBackend,
-  setStoredToken,
-  type AuthSessionResponse,
-} from './lib/api';
-import { subscribeLocalSync } from './lib/localBackend';
+  resolveFirebaseSession,
+  subscribeFirestoreBranding,
+  subscribeFirestoreSnapshot,
+} from './lib/firebaseBackend';
 import {
   DEFAULT_BRANDING,
   type AppDataSnapshot,
@@ -64,6 +60,7 @@ const EMPTY_SNAPSHOT: AppDataSnapshot = {
   maintenances: [],
   attendances: [],
   users: [],
+  invites: [],
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -89,9 +86,11 @@ function formatIndonesianDate(date: Date): string {
 
 export function App() {
   const [booting, setBooting] = useState(true);
-  const [needsSetup, setNeedsSetup] = useState(false);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(() => getStoredToken());
+  const [onboardingUser, setOnboardingUser] = useState<{
+    email: string;
+    displayName: string;
+  } | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [privateInfo, setPrivateInfo] = useState<UserPrivateInfo | null>(null);
   const [data, setData] = useState<AppDataSnapshot>(EMPTY_SNAPSHOT);
@@ -115,165 +114,97 @@ export function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const refreshBranding = useCallback(async () => {
-    try {
-      const next = await brandingApi.get();
-      setBranding(next);
-    } catch {
-      // Keep current branding on transient failure
-    }
+  // Real-time branding listener
+  useEffect(() => {
+    const unsub = subscribeFirestoreBranding(setBranding);
+    return () => unsub();
   }, []);
 
-  const refreshSnapshot = useCallback(async () => {
-    const snapshot = await authApi.fetchSnapshot();
-    setData(snapshot);
-  }, []);
-
-  const clearSession = useCallback((notice?: string) => {
-    setStoredToken(null);
-    setToken(null);
-    setProfile(null);
-    setPrivateInfo(null);
-    setData(EMPTY_SNAPSHOT);
-    if (notice) setAuthNotice(notice);
-  }, []);
-
+  // Auth state observer
   useEffect(() => {
     let cancelled = false;
-
-    async function init() {
-      setBooting(true);
-      await probeBackend(true);
-      void refreshBranding();
-      const existingToken = getStoredToken();
-      if (existingToken) {
-        try {
-          const [me, snapshot] = await Promise.all([authApi.me(), authApi.fetchSnapshot()]);
-          if (!cancelled) {
-            setProfile(me.profile);
-            setPrivateInfo(me.privateInfo);
-            setData(snapshot);
-            setToken(existingToken);
-            setNeedsSetup(false);
-            if (me.profile.role === 'guru' || me.profile.role === 'siswa') {
-              setActiveTab('assets');
-            }
-            setBooting(false);
-          }
-          return;
-        } catch (err) {
-          if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-            setStoredToken(null);
-          }
+    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        if (!cancelled) {
+          setProfile(null);
+          setPrivateInfo(null);
+          setOnboardingUser(null);
+          setData(EMPTY_SNAPSHOT);
+          setBooting(false);
         }
+        return;
       }
 
       try {
-        const status = await authApi.bootstrapStatus();
-        if (!cancelled) {
-          setNeedsSetup(status.needsSetup);
+        const res = await resolveFirebaseSession(firebaseUser);
+        if (cancelled) return;
+        if (res.status === 'ready') {
+          setProfile(res.profile);
+          setPrivateInfo(res.privateInfo);
+          setOnboardingUser(null);
+          setAuthNotice(null);
+          setActiveTab((prev) => {
+            if (res.profile.role === 'guru' || res.profile.role === 'siswa') {
+              return prev === 'loans' ? 'loans' : 'assets';
+            }
+            return prev;
+          });
+        } else {
           setProfile(null);
-          setToken(null);
+          setPrivateInfo(null);
+          setOnboardingUser({ email: res.email, displayName: res.displayName });
         }
       } catch (err) {
         if (!cancelled) {
-          setAuthNotice(
-            err instanceof Error ? err.message : 'Gagal menghubungi server SIPALAK.'
-          );
+          setProfile(null);
+          setPrivateInfo(null);
+          setOnboardingUser(null);
+          setAuthNotice(formatApiError(err, 'Gagal memverifikasi sesi pengguna.'));
         }
       } finally {
         if (!cancelled) setBooting(false);
       }
-    }
+    });
 
-    void init();
     return () => {
       cancelled = true;
+      unsub();
     };
   }, []);
 
+  // Real-time Firestore data listeners (only when authenticated and profile ready)
+  const profileUid = profile?.uid ?? null;
+  const isAdmin = profile?.role === 'admin';
+
   useEffect(() => {
-    if (!token || !profile) return;
-
-    if (getBackendMode() === 'local') {
-      return subscribeLocalSync(() => {
-        void refreshBranding();
-        void refreshSnapshot().catch(() => {
-          // Ignore transient refresh failure
-        });
-      });
-    }
-
-    let closedByEffect = false;
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const connect = () => {
-      ws = new WebSocket(getWsUrl());
-
-      ws.onopen = () => {
-        ws?.send(JSON.stringify({ type: 'auth', token }));
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(String(event.data)) as { type?: string; scope?: string };
-          if (msg.type === 'sync') {
-            if (msg.scope === 'branding') {
-              void refreshBranding();
-            } else {
-              void refreshSnapshot().catch(() => {
-                // Ignore transient refresh failure
-              });
-            }
-          } else if (msg.type === 'force-logout') {
-            clearSession('Sesi Anda telah dinonaktifkan oleh Administrator.');
-          }
-        } catch {
-          // Ignore malformed message
-        }
-      };
-
-      ws.onclose = () => {
-        if (!closedByEffect) {
-          reconnectTimer = setTimeout(connect, 3000);
-        }
-      };
-    };
-
-    connect();
-
-    return () => {
-      closedByEffect = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      ws?.close();
-    };
-  }, [token, profile, refreshBranding, refreshSnapshot, clearSession]);
-
-  const handleAuthenticated = async (res: AuthSessionResponse) => {
-    setStoredToken(res.token);
-    setToken(res.token);
-    setProfile(res.profile);
-    setPrivateInfo(res.privateInfo);
-    setNeedsSetup(false);
-    setAuthNotice(null);
-    setActiveTab(
-      res.profile.role === 'guru' || res.profile.role === 'siswa' ? 'assets' : 'overview'
+    if (!profileUid) return;
+    const unsub = subscribeFirestoreSnapshot(
+      profileUid,
+      isAdmin,
+      (updater) => setData(updater),
+      (err) => {
+        notify(formatApiError(err, 'Gagal menyinkronkan data Cloud Firestore.'), 'error');
+      }
     );
-    try {
-      await refreshSnapshot();
-    } catch {
-      // Snapshot will retry if needed
-    }
-  };
+    return () => unsub();
+  }, [profileUid, isAdmin, notify]);
+
+  const refreshSnapshot = useCallback(async () => {
+    if (!profileUid) return;
+    const snapshot = await authApi.fetchSnapshot(isAdmin);
+    setData(snapshot);
+  }, [profileUid, isAdmin]);
 
   const handleLogout = async () => {
     try {
       await authApi.logout();
     } catch {
-      // Ignore network errors during logout
+      // Ignore transient signOut errors
     }
-    clearSession();
+    setProfile(null);
+    setPrivateInfo(null);
+    setOnboardingUser(null);
+    setData(EMPTY_SNAPSHOT);
   };
 
   if (booting) {
@@ -292,15 +223,26 @@ export function App() {
   if (!profile || !privateInfo) {
     return (
       <AuthScreen
-        needsSetup={needsSetup}
         branding={branding}
         initialNotice={authNotice}
-        onAuthenticated={handleAuthenticated}
+        onboardingUser={onboardingUser}
+        onAuthenticated={(nextProfile, nextPrivate) => {
+          setProfile(nextProfile);
+          setPrivateInfo(nextPrivate);
+          setOnboardingUser(null);
+          setAuthNotice(null);
+          setActiveTab(
+            nextProfile.role === 'guru' || nextProfile.role === 'siswa' ? 'assets' : 'overview'
+          );
+        }}
+        onCancelOnboarding={() => {
+          setOnboardingUser(null);
+          setAuthNotice(null);
+        }}
       />
     );
   }
 
-  const isAdmin = profile.role === 'admin';
   const isGuruOrSiswa = profile.role === 'guru' || profile.role === 'siswa';
 
   type NavItem = {
@@ -574,6 +516,7 @@ export function App() {
           {effectiveTab === 'users' && isAdmin && (
             <UsersTab
               users={data.users}
+              invites={data.invites}
               currentUserId={profile.uid}
               onRefresh={refreshSnapshot}
               onNotify={notify}
@@ -595,10 +538,7 @@ export function App() {
         </main>
 
         <footer className="py-4 px-6 text-center text-xs text-slate-400">
-          {branding.appName} · {branding.appSubtitle} ·{' '}
-          {getBackendMode() === 'local'
-            ? 'Data tersimpan pada browser perangkat ini'
-            : 'Sinkronisasi server aktif'}
+          {branding.appName} · {branding.appSubtitle} · Tersimpan permanen di Cloud Firestore
         </footer>
       </div>
 
@@ -626,5 +566,3 @@ export function App() {
     </div>
   );
 }
-
-export default App;

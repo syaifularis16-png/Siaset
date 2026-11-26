@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { UserPlus, Pencil, Trash2, X } from 'lucide-react';
 import { apiFetch } from '../lib/api';
-import { SYSTEM_ROLES, type SystemRole, type UserProfile } from '../types';
+import { SYSTEM_ROLES, type SystemRole, type UserInvite, type UserProfile } from '../types';
 
 interface UsersTabProps {
   users: UserProfile[];
+  invites?: UserInvite[];
   currentUserId: string;
   onRefresh: () => Promise<void>;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
@@ -12,15 +13,16 @@ interface UsersTabProps {
 
 export const UsersTab: React.FC<UsersTabProps> = ({
   users,
+  invites = [],
   currentUserId,
   onRefresh,
   onNotify,
 }) => {
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingUid, setEditingUid] = useState<string | null>(null);
+  const [editingKind, setEditingKind] = useState<'user' | 'invite' | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [role, setRole] = useState<SystemRole>('guru');
   const [unit, setUnit] = useState('');
   const [idNumber, setIdNumber] = useState('');
@@ -31,10 +33,10 @@ export const UsersTab: React.FC<UsersTabProps> = ({
   const [saving, setSaving] = useState(false);
 
   const openCreate = () => {
-    setEditingUid(null);
+    setEditingKind(null);
+    setEditingId(null);
     setDisplayName('');
     setUsername('');
-    setPassword('');
     setRole('guru');
     setUnit('');
     setIdNumber('');
@@ -45,11 +47,11 @@ export const UsersTab: React.FC<UsersTabProps> = ({
     setModalOpen(true);
   };
 
-  const openEdit = (u: UserProfile) => {
-    setEditingUid(u.uid);
+  const openEditUser = (u: UserProfile) => {
+    setEditingKind('user');
+    setEditingId(u.uid);
     setDisplayName(u.displayName);
     setUsername(u.username);
-    setPassword('');
     setRole(u.role);
     setUnit(u.unit);
     setIdNumber(u.idNumber);
@@ -60,12 +62,27 @@ export const UsersTab: React.FC<UsersTabProps> = ({
     setModalOpen(true);
   };
 
+  const openEditInvite = (inv: UserInvite) => {
+    setEditingKind('invite');
+    setEditingId(inv.id);
+    setDisplayName(inv.displayName);
+    setUsername(inv.username);
+    setRole(inv.role);
+    setUnit(inv.unit);
+    setIdNumber(inv.idNumber);
+    setEmail(inv.email);
+    setPhone(inv.phone);
+    setBio(inv.bio);
+    setActive(inv.active);
+    setModalOpen(true);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
-      if (editingUid) {
-        await apiFetch(`/api/users/${editingUid}`, {
+      if (editingKind === 'user' && editingId) {
+        await apiFetch(`/api/users/${editingId}`, {
           method: 'PUT',
           body: JSON.stringify({
             displayName,
@@ -75,17 +92,30 @@ export const UsersTab: React.FC<UsersTabProps> = ({
             idNumber,
             bio,
             active,
-            ...(password ? { newPassword: password } : {}),
           }),
         });
         onNotify('Akun pengguna berhasil diperbarui.');
+      } else if (editingKind === 'invite' && editingId) {
+        await apiFetch(`/api/invites/${editingId}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            displayName,
+            username,
+            role,
+            unit,
+            idNumber,
+            phone,
+            bio,
+            active,
+          }),
+        });
+        onNotify('Undangan akun berhasil diperbarui.');
       } else {
         await apiFetch('/api/users', {
           method: 'POST',
           body: JSON.stringify({
             displayName,
             username,
-            password,
             role,
             unit,
             idNumber,
@@ -95,7 +125,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
             active,
           }),
         });
-        onNotify('Akun pengguna baru berhasil dibuat.');
+        onNotify('Undangan akun berhasil ditambahkan. Pengguna dapat masuk dengan akun Google tersebut.');
       }
       setModalOpen(false);
       await onRefresh();
@@ -106,13 +136,23 @@ export const UsersTab: React.FC<UsersTabProps> = ({
     }
   };
 
-  const handleDelete = async (u: UserProfile) => {
+  const handleDeleteUser = async (u: UserProfile) => {
     try {
       await apiFetch(`/api/users/${u.uid}`, { method: 'DELETE' });
-      onNotify(`Akun @${u.username} dihapus.`);
+      onNotify(`Akun ${u.displayName} dihapus.`);
       await onRefresh();
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Gagal menghapus pengguna.', 'error');
+    }
+  };
+
+  const handleDeleteInvite = async (inv: UserInvite) => {
+    try {
+      await apiFetch(`/api/invites/${inv.id}`, { method: 'DELETE' });
+      onNotify(`Undangan untuk ${inv.email} dihapus.`);
+      await onRefresh();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Gagal menghapus undangan.', 'error');
     }
   };
 
@@ -140,7 +180,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500">
               <tr>
-                <th className="px-4 py-3 font-semibold">Nama & Username</th>
+                <th className="px-4 py-3 font-semibold">Nama & Identitas</th>
                 <th className="px-4 py-3 font-semibold">Peran</th>
                 <th className="px-4 py-3 font-semibold">Unit / Kelas</th>
                 <th className="px-4 py-3 font-semibold">NIP / NIS</th>
@@ -153,7 +193,9 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                 <tr key={u.uid} className="hover:bg-slate-50/70">
                   <td className="px-4 py-3">
                     <div className="font-semibold text-slate-900">{u.displayName}</div>
-                    <div className="font-mono text-xs text-slate-500">@{u.username}</div>
+                    <div className="font-mono text-xs text-slate-500">
+                      {u.username ? `@${u.username}` : u.uid.slice(0, 12)}
+                    </div>
                   </td>
                   <td className="px-4 py-3 capitalize font-medium text-slate-700">{u.role}</td>
                   <td className="px-4 py-3 text-slate-600">{u.unit || '—'}</td>
@@ -175,7 +217,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                     <div className="inline-flex items-center gap-1">
                       <button
                         type="button"
-                        onClick={() => openEdit(u)}
+                        onClick={() => openEditUser(u)}
                         className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 cursor-pointer"
                       >
                         <Pencil className="w-4 h-4" />
@@ -183,12 +225,48 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                       {u.uid !== currentUserId && (
                         <button
                           type="button"
-                          onClick={() => handleDelete(u)}
+                          onClick={() => handleDeleteUser(u)}
                           className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
                       )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {invites.map((inv) => (
+                <tr key={`invite-${inv.id}`} className="hover:bg-slate-50/70 bg-amber-50/25">
+                  <td className="px-4 py-3">
+                    <div className="font-semibold text-slate-900">{inv.displayName}</div>
+                    <div className="font-mono text-xs text-slate-500">{inv.email}</div>
+                  </td>
+                  <td className="px-4 py-3 capitalize font-medium text-slate-700">{inv.role}</td>
+                  <td className="px-4 py-3 text-slate-600">{inv.unit || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-600">
+                    {inv.idNumber || '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="inline-block px-2.5 py-0.5 rounded-md text-xs font-medium border bg-amber-50 text-amber-700 border-amber-200">
+                      Menunggu Login Google
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEditInvite(inv)}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 cursor-pointer"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteInvite(inv)}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -203,7 +281,11 @@ export const UsersTab: React.FC<UsersTabProps> = ({
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
               <h3 className="font-bold text-slate-900">
-                {editingUid ? 'Edit Akun Pengguna' : 'Tambah Akun Pengguna'}
+                {editingKind === 'user'
+                  ? 'Edit Akun Pengguna'
+                  : editingKind === 'invite'
+                    ? 'Edit Undangan Akun'
+                    : 'Tambah Akun Pengguna'}
               </h3>
               <button
                 type="button"
@@ -229,12 +311,10 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Username *
+                    Username (Opsional)
                   </label>
                   <input
                     type="text"
-                    required
-                    minLength={2}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono"
@@ -256,20 +336,34 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    {editingUid ? 'Password Baru (Opsional)' : 'Password * (Min. 6)'}
-                  </label>
-                  <input
-                    type="password"
-                    required={!editingUid}
-                    minLength={editingUid ? undefined : 6}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={editingUid ? 'Biarkan kosong jika tetap' : '••••••'}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-                  />
-                </div>
+                {!editingKind && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      Email Google *
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="nama@guru.sma.belajar.id"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                    />
+                  </div>
+                )}
+                {editingKind === 'invite' && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      Email Google
+                    </label>
+                    <input
+                      type="email"
+                      disabled
+                      value={email}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-500"
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
                     Unit / Kelas
@@ -290,29 +384,18 @@ export const UsersTab: React.FC<UsersTabProps> = ({
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono"
                   />
                 </div>
-                {!editingUid && (
-                  <>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">Email</label>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        No. Telepon
-                      </label>
-                      <input
-                        type="text"
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-                      />
-                    </div>
-                  </>
+                {editingKind !== 'user' && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">
+                      No. Telepon
+                    </label>
+                    <input
+                      type="text"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                    />
+                  </div>
                 )}
               </div>
 

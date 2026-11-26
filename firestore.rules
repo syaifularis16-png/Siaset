@@ -37,7 +37,10 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isVerifiedUser() && request.auth.token.email.lower() == 'yuliwinarsih771@guru.sma.belajar.id';
+      return isVerifiedUser() && (
+        request.auth.token.email.lower() == 'syaifularis16@guru.sma.belajar.id' ||
+        request.auth.token.email.lower() == 'yuliwinarsih771@guru.sma.belajar.id'
+      );
     }
 
     function isAdmin() {
@@ -135,7 +138,7 @@ service cloud.firestore {
 
     function isValidLoan(data) {
       return data.keys().hasAll(['assetId', 'assetCode', 'assetName', 'requesterId', 'borrowerName', 'borrowerRole', 'unit', 'borrowDate', 'returnDate', 'purpose', 'status', 'notes', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['assetId', 'assetCode', 'assetName', 'requesterId', 'borrowerName', 'borrowerRole', 'unit', 'borrowDate', 'returnDate', 'purpose', 'status', 'notes', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['assetId', 'assetCode', 'assetName', 'requesterId', 'borrowerName', 'borrowerRole', 'unit', 'borrowDate', 'returnDate', 'lessonPeriod', 'borrowTime', 'returnTime', 'purpose', 'status', 'notes', 'createdAt', 'updatedAt'])
         && isValidId(data.assetId)
         && data.assetCode is string && data.assetCode.size() >= 1 && data.assetCode.size() <= 50
         && data.assetName is string && data.assetName.size() >= 1 && data.assetName.size() <= 100
@@ -145,10 +148,22 @@ service cloud.firestore {
         && data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 60
         && data.borrowDate is string && data.borrowDate.size() >= 1 && data.borrowDate.size() <= 20
         && data.returnDate is string && data.returnDate.size() >= 1 && data.returnDate.size() <= 20
+        && (!('lessonPeriod' in data) || (data.lessonPeriod is string && data.lessonPeriod.size() <= 40))
+        && (!('borrowTime' in data) || (data.borrowTime is string && data.borrowTime.size() <= 10))
+        && (!('returnTime' in data) || (data.returnTime is string && data.returnTime.size() <= 10))
         && data.purpose is string && data.purpose.size() >= 1 && data.purpose.size() <= 240
         && data.status is string && data.status in ['Menunggu', 'Disetujui', 'Dipinjam', 'Dikembalikan', 'Ditolak']
         && data.notes is string && data.notes.size() <= 240
         && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBrandingSettings(data) {
+      return data.keys().hasAll(['appName', 'appSubtitle', 'schoolName', 'updatedAt'])
+        && data.keys().hasOnly(['appName', 'appSubtitle', 'schoolName', 'updatedAt'])
+        && data.appName is string && data.appName.size() >= 1 && data.appName.size() <= 40
+        && data.appSubtitle is string && data.appSubtitle.size() >= 1 && data.appSubtitle.size() <= 120
+        && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 100
         && data.updatedAt is timestamp;
     }
 
@@ -384,7 +399,7 @@ service cloud.firestore {
           || (existing().requesterId == request.auth.uid
             && existing().status == 'Menunggu'
             && incoming().status == 'Menunggu'
-            && incoming().diff(existing()).affectedKeys().hasOnly(['borrowDate', 'returnDate', 'purpose', 'notes', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['borrowDate', 'returnDate', 'lessonPeriod', 'borrowTime', 'returnTime', 'purpose', 'notes', 'updatedAt']))
         );
       allow delete: if isValidId(loanId) && (isAdmin() || (isVerifiedUser() && existing().requesterId == request.auth.uid && existing().status == 'Menunggu'));
     }
@@ -463,6 +478,17 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly(['checkOutTime', 'notes', 'updatedAt']))
         );
       allow delete: if isAdmin() && isValidId(attendanceId);
+    }
+
+    // Collection: settings (Application branding settings)
+    match /settings/{docId} {
+      allow get: if docId == 'branding';
+      allow list: if false;
+      allow create, update: if isAdmin()
+        && docId == 'branding'
+        && isValidBrandingSettings(incoming())
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
     }
   }
 }

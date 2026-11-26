@@ -316,6 +316,18 @@
           "minLength": 1,
           "maxLength": 20
         },
+        "lessonPeriod": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "borrowTime": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "returnTime": {
+          "type": "string",
+          "maxLength": 10
+        },
         "purpose": {
           "type": "string",
           "minLength": 1,
@@ -618,6 +630,33 @@
         }
       },
       "required": ["uid", "salt", "iv", "encryptedEmail", "updatedAt"]
+    },
+    "BrandingSettings": {
+      "title": "BrandingSettings",
+      "description": "Application branding and school identity settings.",
+      "type": "object",
+      "properties": {
+        "appName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "appSubtitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["appName", "appSubtitle", "schoolName", "updatedAt"]
     }
   },
   "firestore": {
@@ -660,6 +699,10 @@
     "/attendances/{attendanceId}": {
       "schema": { "$ref": "#/entities/Attendance" },
       "description": "Laboratory visitor attendance entries."
+    },
+    "/settings/{docId}": {
+      "schema": { "$ref": "#/entities/BrandingSettings" },
+      "description": "Publicly readable, admin-writable application branding settings."
     }
   }
 }

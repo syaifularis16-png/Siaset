@@ -30,7 +30,6 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
   const [email, setEmail] = useState(privateInfo.email);
   const [phone, setPhone] = useState(privateInfo.phone);
   const [bio, setBio] = useState(profile.bio);
-  const [newPassword, setNewPassword] = useState('');
   const [saving, setSaving] = useState(false);
 
   const canChangeSelfRole =
@@ -49,15 +48,9 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
         phone,
         bio,
         ...(canChangeSelfRole ? { role } : {}),
-        ...(newPassword ? { newPassword } : {}),
       });
-      setNewPassword('');
       onProfileUpdated(res.profile, res.privateInfo);
-      onNotify(
-        res.passwordUpdated
-          ? 'Profil dan kata sandi berhasil diperbarui.'
-          : 'Profil Anda berhasil diperbarui.'
-      );
+      onNotify('Profil Anda berhasil diperbarui.');
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Gagal memperbarui profil.', 'error');
     } finally {
@@ -70,7 +63,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
       <div>
         <h2 className="text-lg font-bold text-slate-900">Profil Pengguna</h2>
         <p className="text-sm text-slate-500">
-          Perbarui identitas operasional, informasi kontak pribadi, dan kata sandi Anda.
+          Perbarui identitas operasional dan informasi kontak pribadi Anda.
         </p>
       </div>
 
@@ -90,10 +83,9 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Username *</label>
+            <label className="block text-xs font-medium text-slate-700 mb-1">Username</label>
             <input
               type="text"
-              required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono"
@@ -149,24 +141,12 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
             />
           </div>
-          <div>
+          <div className="sm:col-span-2">
             <label className="block text-xs font-medium text-slate-700 mb-1">No. Telepon</label>
             <input
               type="text"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Kata Sandi Baru (Opsional)
-            </label>
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Kosongkan jika tidak diganti"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
             />
           </div>

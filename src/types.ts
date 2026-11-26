@@ -45,6 +45,24 @@ export interface UserPrivateInfo {
   updatedAt: string;
 }
 
+export interface UserInvite {
+  id: string;
+  email: string;
+  displayName: string;
+  username: string;
+  role: SystemRole;
+  unit: string;
+  idNumber: string;
+  phone: string;
+  bio: string;
+  active: boolean;
+  claimed: boolean;
+  claimedByUid: string;
+  invitedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Asset {
   id: string;
   code: string;
@@ -138,6 +156,7 @@ export interface AppDataSnapshot {
   maintenances: Maintenance[];
   attendances: Attendance[];
   users: UserProfile[];
+  invites?: UserInvite[];
 }
 
 export const ASSET_CATEGORIES: AssetCategory[] = [
