@@ -643,10 +643,14 @@ app.post('/api/loans', requireAuth, (req: AuthenticatedRequest, res) => {
   }
 
   const borrowerName = clampStr(req.body?.borrowerName, 80);
-  const borrowerRole = String(req.body?.borrowerRole || 'Guru');
+  const borrowerRole =
+    req.authUser!.role === 'guru' ? 'Guru' : String(req.body?.borrowerRole || 'Guru');
   const unit = clampStr(req.body?.unit, 60);
   const borrowDate = clampStr(req.body?.borrowDate, 20);
   const returnDate = clampStr(req.body?.returnDate, 20);
+  const lessonPeriod = clampStr(req.body?.lessonPeriod, 40);
+  const borrowTime = clampStr(req.body?.borrowTime, 10);
+  const returnTime = clampStr(req.body?.returnTime, 10);
   const purpose = clampStr(req.body?.purpose, 240);
   const notes = clampStr(req.body?.notes, 240);
 
@@ -655,6 +659,9 @@ app.post('/api/loans', requireAuth, (req: AuthenticatedRequest, res) => {
     !unit ||
     !borrowDate ||
     !returnDate ||
+    !lessonPeriod ||
+    !borrowTime ||
+    !returnTime ||
     !purpose ||
     !ALLOWED_PERSON_ROLES.has(borrowerRole)
   ) {
@@ -665,8 +672,8 @@ app.post('/api/loans', requireAuth, (req: AuthenticatedRequest, res) => {
   const id = crypto.randomUUID();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO loans (id, asset_id, asset_code, asset_name, requester_id, borrower_name, borrower_role, unit, borrow_date, return_date, purpose, status, notes, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Menunggu', ?, ?, ?)`
+    `INSERT INTO loans (id, asset_id, asset_code, asset_name, requester_id, borrower_name, borrower_role, unit, borrow_date, return_date, lesson_period, borrow_time, return_time, purpose, status, notes, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Menunggu', ?, ?, ?)`
   ).run(
     id,
     assetId,
@@ -678,6 +685,9 @@ app.post('/api/loans', requireAuth, (req: AuthenticatedRequest, res) => {
     unit,
     borrowDate,
     returnDate,
+    lessonPeriod,
+    borrowTime,
+    returnTime,
     purpose,
     notes,
     now,
@@ -733,13 +743,16 @@ app.put('/api/loans/:id', requireAuth, (req: AuthenticatedRequest, res) => {
     }
     const borrowDate = clampStr(req.body?.borrowDate, 20) || String(existing.borrow_date);
     const returnDate = clampStr(req.body?.returnDate, 20) || String(existing.return_date);
+    const lessonPeriod = clampStr(req.body?.lessonPeriod, 40) || String(existing.lesson_period ?? '');
+    const borrowTime = clampStr(req.body?.borrowTime, 10) || String(existing.borrow_time ?? '');
+    const returnTime = clampStr(req.body?.returnTime, 10) || String(existing.return_time ?? '');
     const purpose = clampStr(req.body?.purpose, 240) || String(existing.purpose);
     const notes =
       req.body?.notes !== undefined ? clampStr(req.body.notes, 240) : String(existing.notes);
 
     db.prepare(
-      'UPDATE loans SET borrow_date = ?, return_date = ?, purpose = ?, notes = ?, updated_at = ? WHERE id = ?'
-    ).run(borrowDate, returnDate, purpose, notes, now, loanId);
+      'UPDATE loans SET borrow_date = ?, return_date = ?, lesson_period = ?, borrow_time = ?, return_time = ?, purpose = ?, notes = ?, updated_at = ? WHERE id = ?'
+    ).run(borrowDate, returnDate, lessonPeriod, borrowTime, returnTime, purpose, notes, now, loanId);
   }
 
   broadcastSync('loans');

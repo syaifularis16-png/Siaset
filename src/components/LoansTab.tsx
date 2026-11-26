@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Plus, Trash2, Check, X } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import {
+  LESSON_PERIOD_OPTIONS,
   LOAN_STATUSES,
   PERSON_ROLES,
   todayIsoDate,
@@ -29,13 +30,25 @@ export const LoansTab: React.FC<LoansTabProps> = ({
   onRefresh,
   onNotify,
 }) => {
+  const isGuruAccount = profile.role === 'guru';
+  const defaultBorrowerRole: PersonRole =
+    profile.role === 'siswa'
+      ? 'Siswa'
+      : profile.role === 'teknisi'
+        ? 'Teknisi'
+        : 'Guru';
+  const availableBorrowerRoles: PersonRole[] = isGuruAccount ? ['Guru'] : PERSON_ROLES;
+
   const [modalOpen, setModalOpen] = useState(false);
   const [assetId, setAssetId] = useState('');
   const [borrowerName, setBorrowerName] = useState(profile.displayName);
-  const [borrowerRole, setBorrowerRole] = useState<PersonRole>('Guru');
+  const [borrowerRole, setBorrowerRole] = useState<PersonRole>(defaultBorrowerRole);
   const [unit, setUnit] = useState(profile.unit || 'Lab Komputer');
   const [borrowDate, setBorrowDate] = useState(todayIsoDate());
   const [returnDate, setReturnDate] = useState(todayIsoDate());
+  const [lessonPeriod, setLessonPeriod] = useState(LESSON_PERIOD_OPTIONS[0].value);
+  const [borrowTime, setBorrowTime] = useState(LESSON_PERIOD_OPTIONS[0].startTime);
+  const [returnTime, setReturnTime] = useState(LESSON_PERIOD_OPTIONS[0].endTime);
   const [purpose, setPurpose] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -43,12 +56,25 @@ export const LoansTab: React.FC<LoansTabProps> = ({
   const openCreate = () => {
     setAssetId(assets[0]?.id ?? '');
     setBorrowerName(profile.displayName);
+    setBorrowerRole(defaultBorrowerRole);
     setUnit(profile.unit || 'Lab Komputer');
     setBorrowDate(todayIsoDate());
     setReturnDate(todayIsoDate());
+    setLessonPeriod(LESSON_PERIOD_OPTIONS[0].value);
+    setBorrowTime(LESSON_PERIOD_OPTIONS[0].startTime);
+    setReturnTime(LESSON_PERIOD_OPTIONS[0].endTime);
     setPurpose('');
     setNotes('');
     setModalOpen(true);
+  };
+
+  const handleLessonPeriodChange = (value: string) => {
+    setLessonPeriod(value);
+    const matched = LESSON_PERIOD_OPTIONS.find((opt) => opt.value === value);
+    if (matched) {
+      setBorrowTime(matched.startTime);
+      setReturnTime(matched.endTime);
+    }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -60,10 +86,13 @@ export const LoansTab: React.FC<LoansTabProps> = ({
         body: JSON.stringify({
           assetId,
           borrowerName,
-          borrowerRole,
+          borrowerRole: isGuruAccount ? 'Guru' : borrowerRole,
           unit,
           borrowDate,
           returnDate,
+          lessonPeriod,
+          borrowTime,
+          returnTime,
           purpose,
           notes,
         }),
@@ -164,7 +193,21 @@ export const LoansTab: React.FC<LoansTabProps> = ({
                         </div>
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-600">
-                        {loan.borrowDate} → {loan.returnDate}
+                        <div>
+                          {loan.borrowDate} → {loan.returnDate}
+                        </div>
+                        {(loan.lessonPeriod || loan.borrowTime || loan.returnTime) && (
+                          <div className="text-[11px] text-slate-500 mt-0.5 font-sans">
+                            {[
+                              loan.lessonPeriod,
+                              loan.borrowTime && loan.returnTime
+                                ? `${loan.borrowTime} - ${loan.returnTime}`
+                                : loan.borrowTime || loan.returnTime,
+                            ]
+                              .filter(Boolean)
+                              .join(' • ')}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-slate-700 max-w-xs">
                         <div className="truncate">{loan.purpose}</div>
@@ -275,11 +318,14 @@ export const LoansTab: React.FC<LoansTabProps> = ({
                     Status Peminjam *
                   </label>
                   <select
-                    value={borrowerRole}
+                    value={isGuruAccount ? 'Guru' : borrowerRole}
+                    disabled={isGuruAccount}
                     onChange={(e) => setBorrowerRole(e.target.value as PersonRole)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white"
+                    className={`w-full px-3 py-2 rounded-xl border border-slate-200 text-sm ${
+                      isGuruAccount ? 'bg-slate-50 text-slate-700 cursor-not-allowed' : 'bg-white'
+                    }`}
                   >
-                    {PERSON_ROLES.map((r) => (
+                    {availableBorrowerRoles.map((r) => (
                       <option key={r} value={r}>
                         {r}
                       </option>
@@ -323,6 +369,49 @@ export const LoansTab: React.FC<LoansTabProps> = ({
                       className="w-full px-2.5 py-2 rounded-xl border border-slate-200 text-xs"
                     />
                   </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Jam ke- *
+                  </label>
+                  <select
+                    required
+                    value={lessonPeriod}
+                    onChange={(e) => handleLessonPeriodChange(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white"
+                  >
+                    {LESSON_PERIOD_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Waktu Mulai *
+                  </label>
+                  <input
+                    type="time"
+                    required
+                    value={borrowTime}
+                    onChange={(e) => setBorrowTime(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Waktu Selesai *
+                  </label>
+                  <input
+                    type="time"
+                    required
+                    value={returnTime}
+                    onChange={(e) => setReturnTime(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono"
+                  />
                 </div>
               </div>
               <div>

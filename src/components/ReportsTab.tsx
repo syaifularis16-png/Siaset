@@ -57,7 +57,7 @@ export const ReportsTab: React.FC<ReportsTabProps> = ({ data }) => {
       onExport: () =>
         downloadCsv(
           'laporan-peminjaman-sipalak.csv',
-          ['Kode Aset', 'Nama Aset', 'Peminjam', 'Peran', 'Unit', 'Pinjam', 'Kembali', 'Status', 'Keperluan'],
+          ['Kode Aset', 'Nama Aset', 'Peminjam', 'Peran', 'Unit', 'Pinjam', 'Kembali', 'Jam ke-', 'Waktu', 'Status', 'Keperluan'],
           data.loans.map((l) => [
             l.assetCode,
             l.assetName,
@@ -66,6 +66,8 @@ export const ReportsTab: React.FC<ReportsTabProps> = ({ data }) => {
             l.unit,
             l.borrowDate,
             l.returnDate,
+            l.lessonPeriod || '-',
+            l.borrowTime && l.returnTime ? `${l.borrowTime} - ${l.returnTime}` : '-',
             l.status,
             l.purpose,
           ])

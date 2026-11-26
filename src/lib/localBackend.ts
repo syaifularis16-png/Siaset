@@ -109,7 +109,14 @@ function readDb(): LocalDbState {
         users: Array.isArray(parsed.users) ? parsed.users : [],
         sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
         assets: Array.isArray(parsed.assets) ? parsed.assets : [],
-        loans: Array.isArray(parsed.loans) ? parsed.loans : [],
+        loans: Array.isArray(parsed.loans)
+          ? parsed.loans.map((loan) => ({
+              ...loan,
+              lessonPeriod: typeof loan?.lessonPeriod === 'string' ? loan.lessonPeriod : '',
+              borrowTime: typeof loan?.borrowTime === 'string' ? loan.borrowTime : '',
+              returnTime: typeof loan?.returnTime === 'string' ? loan.returnTime : '',
+            }))
+          : [],
         schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
         maintenances: Array.isArray(parsed.maintenances) ? parsed.maintenances : [],
         attendances: Array.isArray(parsed.attendances) ? parsed.attendances : [],
@@ -636,16 +643,24 @@ export async function handleLocalApiRequest<T>(
     const asset = state.assets.find((a) => a.id === assetId);
     if (!asset) throw localHttpError('Aset yang dipilih tidak ditemukan.', 404);
     const borrowerName = clampStr(body.borrowerName, 80);
-    const borrowerRole = String(body.borrowerRole || 'Guru') as PersonRole;
+    const borrowerRole = (
+      current.role === 'guru' ? 'Guru' : String(body.borrowerRole || 'Guru')
+    ) as PersonRole;
     const unit = clampStr(body.unit, 60);
     const borrowDate = clampStr(body.borrowDate, 20);
     const returnDate = clampStr(body.returnDate, 20);
+    const lessonPeriod = clampStr(body.lessonPeriod, 40);
+    const borrowTime = clampStr(body.borrowTime, 10);
+    const returnTime = clampStr(body.returnTime, 10);
     const purpose = clampStr(body.purpose, 240);
     if (
       !borrowerName ||
       !unit ||
       !borrowDate ||
       !returnDate ||
+      !lessonPeriod ||
+      !borrowTime ||
+      !returnTime ||
       !purpose ||
       !ALLOWED_PERSON_ROLES.has(borrowerRole)
     ) {
@@ -663,6 +678,9 @@ export async function handleLocalApiRequest<T>(
       unit,
       borrowDate,
       returnDate,
+      lessonPeriod,
+      borrowTime,
+      returnTime,
       purpose,
       status: 'Menunggu',
       notes: clampStr(body.notes, 240),
@@ -696,6 +714,9 @@ export async function handleLocalApiRequest<T>(
       }
       loan.borrowDate = clampStr(body.borrowDate, 20) || loan.borrowDate;
       loan.returnDate = clampStr(body.returnDate, 20) || loan.returnDate;
+      loan.lessonPeriod = clampStr(body.lessonPeriod, 40) || loan.lessonPeriod;
+      loan.borrowTime = clampStr(body.borrowTime, 10) || loan.borrowTime;
+      loan.returnTime = clampStr(body.returnTime, 10) || loan.returnTime;
       loan.purpose = clampStr(body.purpose, 240) || loan.purpose;
       if (body.notes !== undefined) loan.notes = clampStr(body.notes, 240);
     }

@@ -73,6 +73,9 @@ export interface Loan {
   unit: string;
   borrowDate: string;
   returnDate: string;
+  lessonPeriod: string;
+  borrowTime: string;
+  returnTime: string;
   purpose: string;
   status: LoanStatus;
   notes: string;
@@ -178,6 +181,29 @@ export const MAINTENANCE_STATUSES: MaintenanceStatus[] = [
   'Dijadwalkan',
   'Dalam Proses',
   'Selesai',
+];
+
+export interface LessonPeriodOption {
+  value: string;
+  label: string;
+  startTime: string;
+  endTime: string;
+}
+
+export const LESSON_PERIOD_OPTIONS: LessonPeriodOption[] = [
+  { value: 'Jam ke-1', label: 'Jam ke-1 (07:00 - 07:45)', startTime: '07:00', endTime: '07:45' },
+  { value: 'Jam ke-2', label: 'Jam ke-2 (07:45 - 08:30)', startTime: '07:45', endTime: '08:30' },
+  { value: 'Jam ke-3', label: 'Jam ke-3 (08:30 - 09:15)', startTime: '08:30', endTime: '09:15' },
+  { value: 'Jam ke-4', label: 'Jam ke-4 (09:30 - 10:15)', startTime: '09:30', endTime: '10:15' },
+  { value: 'Jam ke-5', label: 'Jam ke-5 (10:15 - 11:00)', startTime: '10:15', endTime: '11:00' },
+  { value: 'Jam ke-6', label: 'Jam ke-6 (11:00 - 11:45)', startTime: '11:00', endTime: '11:45' },
+  { value: 'Jam ke-7', label: 'Jam ke-7 (12:15 - 13:00)', startTime: '12:15', endTime: '13:00' },
+  { value: 'Jam ke-8', label: 'Jam ke-8 (13:00 - 13:45)', startTime: '13:00', endTime: '13:45' },
+  { value: 'Jam ke-9', label: 'Jam ke-9 (13:45 - 14:30)', startTime: '13:45', endTime: '14:30' },
+  { value: 'Jam ke-10', label: 'Jam ke-10 (14:30 - 15:15)', startTime: '14:30', endTime: '15:15' },
+  { value: 'Jam ke-11', label: 'Jam ke-11 (15:15 - 16:00)', startTime: '15:15', endTime: '16:00' },
+  { value: 'Jam ke-12', label: 'Jam ke-12 (16:00 - 16:45)', startTime: '16:00', endTime: '16:45' },
+  { value: 'Di luar jam KBM', label: 'Di luar jam KBM (Custom)', startTime: '07:00', endTime: '08:30' },
 ];
 
 export function todayIsoDate(): string {

@@ -60,6 +60,9 @@ db.exec(`
     unit TEXT NOT NULL,
     borrow_date TEXT NOT NULL,
     return_date TEXT NOT NULL,
+    lesson_period TEXT NOT NULL DEFAULT '',
+    borrow_time TEXT NOT NULL DEFAULT '',
+    return_time TEXT NOT NULL DEFAULT '',
     purpose TEXT NOT NULL,
     status TEXT NOT NULL,
     notes TEXT NOT NULL DEFAULT '',
@@ -120,6 +123,19 @@ db.exec(`
     value TEXT NOT NULL
   );
 `);
+
+const loanColumns = new Set(
+  (db.prepare('PRAGMA table_info(loans)').all() as Array<{ name: string }>).map((c) => c.name)
+);
+if (!loanColumns.has('lesson_period')) {
+  db.exec(`ALTER TABLE loans ADD COLUMN lesson_period TEXT NOT NULL DEFAULT '';`);
+}
+if (!loanColumns.has('borrow_time')) {
+  db.exec(`ALTER TABLE loans ADD COLUMN borrow_time TEXT NOT NULL DEFAULT '';`);
+}
+if (!loanColumns.has('return_time')) {
+  db.exec(`ALTER TABLE loans ADD COLUMN return_time TEXT NOT NULL DEFAULT '';`);
+}
 
 export interface BrandingSettings {
   appName: string;
@@ -246,6 +262,9 @@ export function mapLoan(row: Record<string, unknown>) {
     unit: String(row.unit),
     borrowDate: String(row.borrow_date),
     returnDate: String(row.return_date),
+    lessonPeriod: String(row.lesson_period ?? ''),
+    borrowTime: String(row.borrow_time ?? ''),
+    returnTime: String(row.return_time ?? ''),
     purpose: String(row.purpose),
     status: String(row.status),
     notes: String(row.notes ?? ''),

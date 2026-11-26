@@ -155,6 +155,9 @@ export function App() {
             setData(snapshot);
             setToken(existingToken);
             setNeedsSetup(false);
+            if (me.profile.role === 'guru' || me.profile.role === 'siswa') {
+              setActiveTab('assets');
+            }
             setBooting(false);
           }
           return;
@@ -254,7 +257,9 @@ export function App() {
     setPrivateInfo(res.privateInfo);
     setNeedsSetup(false);
     setAuthNotice(null);
-    setActiveTab('overview');
+    setActiveTab(
+      res.profile.role === 'guru' || res.profile.role === 'siswa' ? 'assets' : 'overview'
+    );
     try {
       await refreshSnapshot();
     } catch {
@@ -296,6 +301,7 @@ export function App() {
   }
 
   const isAdmin = profile.role === 'admin';
+  const isGuruOrSiswa = profile.role === 'guru' || profile.role === 'siswa';
 
   type NavItem = {
     key: TabKey;
@@ -304,36 +310,53 @@ export function App() {
     adminOnly?: boolean;
   };
 
-  const navGroups: { title: string; items: NavItem[] }[] = [
-    {
-      title: 'RINGKASAN',
-      items: [{ key: 'overview', label: 'Dashboard', icon: LayoutGrid }],
-    },
-    {
-      title: 'MANAJEMEN LAB',
-      items: [
-        { key: 'assets', label: 'Inventaris', icon: Monitor },
-        { key: 'loans', label: 'Peminjaman', icon: ArrowLeftRight },
-        { key: 'schedules', label: 'Jadwal Lab', icon: CalendarDays },
-        { key: 'maintenances', label: 'Maintenance', icon: Wrench },
-        { key: 'users', label: 'Pengguna', icon: User, adminOnly: true },
-      ],
-    },
-    {
-      title: 'ADMINISTRASI',
-      items: [
-        { key: 'attendances', label: 'Absensi', icon: Check },
-        { key: 'reports', label: 'Laporan', icon: FileText },
-        { key: 'profile', label: 'Profil Saya', icon: UserCog },
-      ],
-    },
-  ];
+  const navGroups: { title: string; items: NavItem[] }[] = isGuruOrSiswa
+    ? [
+        {
+          title: 'MANAJEMEN LAB',
+          items: [
+            { key: 'assets', label: 'Inventaris', icon: Monitor },
+            { key: 'loans', label: 'Peminjaman', icon: ArrowLeftRight },
+          ],
+        },
+      ]
+    : [
+        {
+          title: 'RINGKASAN',
+          items: [{ key: 'overview', label: 'Dashboard', icon: LayoutGrid }],
+        },
+        {
+          title: 'MANAJEMEN LAB',
+          items: [
+            { key: 'assets', label: 'Inventaris', icon: Monitor },
+            { key: 'loans', label: 'Peminjaman', icon: ArrowLeftRight },
+            { key: 'schedules', label: 'Jadwal Lab', icon: CalendarDays },
+            { key: 'maintenances', label: 'Maintenance', icon: Wrench },
+            { key: 'users', label: 'Pengguna', icon: User, adminOnly: true },
+          ],
+        },
+        {
+          title: 'ADMINISTRASI',
+          items: [
+            { key: 'attendances', label: 'Absensi', icon: Check },
+            { key: 'reports', label: 'Laporan', icon: FileText },
+            { key: 'profile', label: 'Profil Saya', icon: UserCog },
+          ],
+        },
+      ];
+
+  const effectiveTab: TabKey =
+    isGuruOrSiswa && activeTab !== 'assets' && activeTab !== 'loans' ? 'assets' : activeTab;
 
   const allItems = navGroups.flatMap((g) => g.items);
-  const currentTitle = allItems.find((i) => i.key === activeTab)?.label ?? 'Dashboard';
+  const currentTitle = allItems.find((i) => i.key === effectiveTab)?.label ?? 'Inventaris';
 
   const selectTab = (key: TabKey) => {
-    setActiveTab(key);
+    if (isGuruOrSiswa && key !== 'assets' && key !== 'loans') {
+      setActiveTab('assets');
+    } else {
+      setActiveTab(key);
+    }
     setMobileNavOpen(false);
   };
 
@@ -396,7 +419,7 @@ export function App() {
               <div className="space-y-1">
                 {items.map((item) => {
                   const Icon = item.icon;
-                  const active = activeTab === item.key;
+                  const active = effectiveTab === item.key;
                   return (
                     <button
                       key={item.key}
@@ -472,14 +495,20 @@ export function App() {
               <span>{formattedDate}</span>
             </div>
             <div className="flex items-center gap-2.5 mt-0.5">
-              <button
-                type="button"
-                onClick={() => selectTab('profile')}
-                className="text-xs text-slate-600 hover:text-slate-900 transition-colors cursor-pointer truncate max-w-[180px] sm:max-w-none"
-                title="Buka Profil Saya"
-              >
-                {profile.displayName} · {roleLabel}
-              </button>
+              {isGuruOrSiswa ? (
+                <span className="text-xs text-slate-600 truncate max-w-[180px] sm:max-w-none">
+                  {profile.displayName} · {roleLabel}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => selectTab('profile')}
+                  className="text-xs text-slate-600 hover:text-slate-900 transition-colors cursor-pointer truncate max-w-[180px] sm:max-w-none"
+                  title="Buka Profil Saya"
+                >
+                  {profile.displayName} · {roleLabel}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleLogout}
@@ -492,10 +521,10 @@ export function App() {
         </header>
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1200px] w-full mx-auto">
-          {activeTab === 'overview' && (
+          {effectiveTab === 'overview' && (
             <OverviewTab data={data} profile={profile} onNavigate={selectTab} />
           )}
-          {activeTab === 'assets' && (
+          {effectiveTab === 'assets' && (
             <AssetsTab
               assets={data.assets}
               branding={branding}
@@ -504,7 +533,7 @@ export function App() {
               onNotify={notify}
             />
           )}
-          {activeTab === 'loans' && (
+          {effectiveTab === 'loans' && (
             <LoansTab
               loans={data.loans}
               assets={data.assets}
@@ -514,7 +543,7 @@ export function App() {
               onNotify={notify}
             />
           )}
-          {activeTab === 'schedules' && (
+          {effectiveTab === 'schedules' && (
             <SchedulesTab
               schedules={data.schedules}
               profile={profile}
@@ -523,7 +552,7 @@ export function App() {
               onNotify={notify}
             />
           )}
-          {activeTab === 'maintenances' && (
+          {effectiveTab === 'maintenances' && (
             <MaintenancesTab
               maintenances={data.maintenances}
               assets={data.assets}
@@ -533,7 +562,7 @@ export function App() {
               onNotify={notify}
             />
           )}
-          {activeTab === 'attendances' && (
+          {effectiveTab === 'attendances' && (
             <AttendancesTab
               attendances={data.attendances}
               profile={profile}
@@ -542,7 +571,7 @@ export function App() {
               onNotify={notify}
             />
           )}
-          {activeTab === 'users' && isAdmin && (
+          {effectiveTab === 'users' && isAdmin && (
             <UsersTab
               users={data.users}
               currentUserId={profile.uid}
@@ -550,8 +579,8 @@ export function App() {
               onNotify={notify}
             />
           )}
-          {activeTab === 'reports' && <ReportsTab data={data} />}
-          {activeTab === 'profile' && (
+          {effectiveTab === 'reports' && <ReportsTab data={data} />}
+          {effectiveTab === 'profile' && (
             <ProfileTab
               profile={profile}
               privateInfo={privateInfo}
