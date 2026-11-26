@@ -1,0 +1,361 @@
+import React, { useState } from 'react';
+import { UserPlus, Pencil, Trash2, X } from 'lucide-react';
+import { apiFetch } from '../lib/api';
+import { SYSTEM_ROLES, type SystemRole, type UserProfile } from '../types';
+
+interface UsersTabProps {
+  users: UserProfile[];
+  currentUserId: string;
+  onRefresh: () => Promise<void>;
+  onNotify: (msg: string, type?: 'success' | 'error') => void;
+}
+
+export const UsersTab: React.FC<UsersTabProps> = ({
+  users,
+  currentUserId,
+  onRefresh,
+  onNotify,
+}) => {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingUid, setEditingUid] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<SystemRole>('guru');
+  const [unit, setUnit] = useState('');
+  const [idNumber, setIdNumber] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [bio, setBio] = useState('');
+  const [active, setActive] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const openCreate = () => {
+    setEditingUid(null);
+    setDisplayName('');
+    setUsername('');
+    setPassword('');
+    setRole('guru');
+    setUnit('');
+    setIdNumber('');
+    setEmail('');
+    setPhone('');
+    setBio('');
+    setActive(true);
+    setModalOpen(true);
+  };
+
+  const openEdit = (u: UserProfile) => {
+    setEditingUid(u.uid);
+    setDisplayName(u.displayName);
+    setUsername(u.username);
+    setPassword('');
+    setRole(u.role);
+    setUnit(u.unit);
+    setIdNumber(u.idNumber);
+    setEmail('');
+    setPhone('');
+    setBio(u.bio);
+    setActive(u.active);
+    setModalOpen(true);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      if (editingUid) {
+        await apiFetch(`/api/users/${editingUid}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            displayName,
+            username,
+            role,
+            unit,
+            idNumber,
+            bio,
+            active,
+            ...(password ? { newPassword: password } : {}),
+          }),
+        });
+        onNotify('Akun pengguna berhasil diperbarui.');
+      } else {
+        await apiFetch('/api/users', {
+          method: 'POST',
+          body: JSON.stringify({
+            displayName,
+            username,
+            password,
+            role,
+            unit,
+            idNumber,
+            email,
+            phone,
+            bio,
+            active,
+          }),
+        });
+        onNotify('Akun pengguna baru berhasil dibuat.');
+      }
+      setModalOpen(false);
+      await onRefresh();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Gagal menyimpan pengguna.', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (u: UserProfile) => {
+    try {
+      await apiFetch(`/api/users/${u.uid}`, { method: 'DELETE' });
+      onNotify(`Akun @${u.username} dihapus.`);
+      await onRefresh();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Gagal menghapus pengguna.', 'error');
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">Manajemen Pengguna</h2>
+          <p className="text-sm text-slate-500">
+            Kelola akun akses guru, siswa, teknisi, dan administrator SIPALAK.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={openCreate}
+          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold inline-flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+        >
+          <UserPlus className="w-4 h-4" />
+          Tambah Pengguna
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase text-slate-500">
+              <tr>
+                <th className="px-4 py-3 font-semibold">Nama & Username</th>
+                <th className="px-4 py-3 font-semibold">Peran</th>
+                <th className="px-4 py-3 font-semibold">Unit / Kelas</th>
+                <th className="px-4 py-3 font-semibold">NIP / NIS</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold text-right">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {users.map((u) => (
+                <tr key={u.uid} className="hover:bg-slate-50/70">
+                  <td className="px-4 py-3">
+                    <div className="font-semibold text-slate-900">{u.displayName}</div>
+                    <div className="font-mono text-xs text-slate-500">@{u.username}</div>
+                  </td>
+                  <td className="px-4 py-3 capitalize font-medium text-slate-700">{u.role}</td>
+                  <td className="px-4 py-3 text-slate-600">{u.unit || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-600">
+                    {u.idNumber || '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-block px-2.5 py-0.5 rounded-md text-xs font-medium border ${
+                        u.active
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-slate-100 text-slate-500 border-slate-200'
+                      }`}
+                    >
+                      {u.active ? 'Aktif' : 'Nonaktif'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(u)}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 cursor-pointer"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      {u.uid !== currentUserId && (
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(u)}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {modalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900">
+                {editingUid ? 'Edit Akun Pengguna' : 'Tambah Akun Pengguna'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSubmit} className="p-5 space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Nama Lengkap *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Username *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    minLength={2}
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Peran Akses *
+                  </label>
+                  <select
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as SystemRole)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white"
+                  >
+                    {SYSTEM_ROLES.map((r) => (
+                      <option key={r.value} value={r.value}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    {editingUid ? 'Password Baru (Opsional)' : 'Password * (Min. 6)'}
+                  </label>
+                  <input
+                    type="password"
+                    required={!editingUid}
+                    minLength={editingUid ? undefined : 6}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={editingUid ? 'Biarkan kosong jika tetap' : '••••••'}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Unit / Kelas
+                  </label>
+                  <input
+                    type="text"
+                    value={unit}
+                    onChange={(e) => setUnit(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">NIP / NIS</label>
+                  <input
+                    type="text"
+                    value={idNumber}
+                    onChange={(e) => setIdNumber(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono"
+                  />
+                </div>
+                {!editingUid && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Email</label>
+                      <input
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">
+                        No. Telepon
+                      </label>
+                      <input
+                        type="text"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Bio / Catatan</label>
+                <input
+                  type="text"
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={active}
+                  onChange={(e) => setActive(e.target.checked)}
+                  className="rounded border-slate-300"
+                />
+                Akun aktif (dapat masuk ke sistem)
+              </label>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-100 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white cursor-pointer"
+                >
+                  {saving ? 'Menyimpan...' : 'Simpan Akun'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

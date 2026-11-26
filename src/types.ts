@@ -1,0 +1,180 @@
+export type SystemRole = 'admin' | 'teknisi' | 'guru' | 'siswa' | 'pengguna';
+export type PersonRole = 'Guru' | 'Siswa' | 'Teknisi' | 'Staf';
+export type AssetCategory =
+  | 'Komputer'
+  | 'Monitor'
+  | 'Printer'
+  | 'Jaringan'
+  | 'Proyektor'
+  | 'Periferal'
+  | 'Lainnya';
+export type AssetCondition = 'Baik' | 'Perlu perawatan' | 'Rusak';
+export type LoanStatus = 'Menunggu' | 'Disetujui' | 'Dipinjam' | 'Dikembalikan' | 'Ditolak';
+export type ScheduleStatus = 'Menunggu' | 'Disetujui' | 'Ditolak' | 'Selesai';
+export type MaintenanceStatus = 'Dijadwalkan' | 'Dalam Proses' | 'Selesai';
+
+export interface UserProfile {
+  uid: string;
+  username: string;
+  displayName: string;
+  role: SystemRole;
+  unit: string;
+  idNumber: string;
+  bio: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserPrivateInfo {
+  uid: string;
+  email: string;
+  phone: string;
+  updatedAt: string;
+}
+
+export interface Asset {
+  id: string;
+  code: string;
+  name: string;
+  category: AssetCategory;
+  brand: string;
+  condition: AssetCondition;
+  location: string;
+  fundingSource: string;
+  procurementYear: number;
+  nextMaintenanceDate: string;
+  labScope: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Loan {
+  id: string;
+  assetId: string;
+  assetCode: string;
+  assetName: string;
+  requesterId: string;
+  borrowerName: string;
+  borrowerRole: PersonRole;
+  unit: string;
+  borrowDate: string;
+  returnDate: string;
+  purpose: string;
+  status: LoanStatus;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LabSchedule {
+  id: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  activity: string;
+  requesterId: string;
+  requesterName: string;
+  requesterRole: PersonRole;
+  unit: string;
+  status: ScheduleStatus;
+  labScope: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Maintenance {
+  id: string;
+  assetId: string;
+  assetCode: string;
+  assetName: string;
+  issue: string;
+  actionTaken: string;
+  technicianName: string;
+  maintenanceDate: string;
+  status: MaintenanceStatus;
+  resultingCondition: AssetCondition;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Attendance {
+  id: string;
+  userId: string;
+  date: string;
+  checkInTime: string;
+  checkOutTime: string;
+  visitorName: string;
+  visitorRole: PersonRole;
+  unit: string;
+  activity: string;
+  workstation: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AppDataSnapshot {
+  assets: Asset[];
+  loans: Loan[];
+  schedules: LabSchedule[];
+  maintenances: Maintenance[];
+  attendances: Attendance[];
+  users: UserProfile[];
+}
+
+export const ASSET_CATEGORIES: AssetCategory[] = [
+  'Komputer',
+  'Monitor',
+  'Printer',
+  'Jaringan',
+  'Proyektor',
+  'Periferal',
+  'Lainnya',
+];
+
+export const ASSET_CONDITIONS: AssetCondition[] = ['Baik', 'Perlu perawatan', 'Rusak'];
+
+export const PERSON_ROLES: PersonRole[] = ['Guru', 'Siswa', 'Teknisi', 'Staf'];
+
+export const SYSTEM_ROLES: { value: SystemRole; label: string }[] = [
+  { value: 'admin', label: 'Administrator' },
+  { value: 'teknisi', label: 'Teknisi Lab' },
+  { value: 'guru', label: 'Guru' },
+  { value: 'siswa', label: 'Siswa' },
+  { value: 'pengguna', label: 'Pengguna Umum' },
+];
+
+export const LOAN_STATUSES: LoanStatus[] = [
+  'Menunggu',
+  'Disetujui',
+  'Dipinjam',
+  'Dikembalikan',
+  'Ditolak',
+];
+
+export const SCHEDULE_STATUSES: ScheduleStatus[] = [
+  'Menunggu',
+  'Disetujui',
+  'Ditolak',
+  'Selesai',
+];
+
+export const MAINTENANCE_STATUSES: MaintenanceStatus[] = [
+  'Dijadwalkan',
+  'Dalam Proses',
+  'Selesai',
+];
+
+export function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function currentHmTime(): string {
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2, '0');
+  const m = String(now.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+}
