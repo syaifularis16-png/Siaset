@@ -16,10 +16,14 @@ import {
 import {
   ApiError,
   authApi,
+  getBackendMode,
   getStoredToken,
+  getWsUrl,
+  probeBackend,
   setStoredToken,
   type AuthSessionResponse,
 } from './lib/api';
+import { subscribeLocalSync } from './lib/localBackend';
 import type { AppDataSnapshot, UserPrivateInfo, UserProfile } from './types';
 import { AuthScreen } from './components/AuthScreen';
 import { OverviewTab } from './components/OverviewTab';
@@ -91,6 +95,7 @@ export function App() {
 
     async function init() {
       setBooting(true);
+      await probeBackend(true);
       const existingToken = getStoredToken();
       if (existingToken) {
         try {
@@ -118,9 +123,11 @@ export function App() {
           setProfile(null);
           setToken(null);
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
-          setAuthNotice('Gagal menghubungi server SIPALAK.');
+          setAuthNotice(
+            err instanceof Error ? err.message : 'Gagal menghubungi server SIPALAK.'
+          );
         }
       } finally {
         if (!cancelled) setBooting(false);
@@ -136,13 +143,20 @@ export function App() {
   useEffect(() => {
     if (!token || !profile) return;
 
+    if (getBackendMode() === 'local') {
+      return subscribeLocalSync(() => {
+        void refreshSnapshot().catch(() => {
+          // Ignore transient refresh failure
+        });
+      });
+    }
+
     let closedByEffect = false;
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const connect = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      ws = new WebSocket(getWsUrl());
 
       ws.onopen = () => {
         ws?.send(JSON.stringify({ type: 'auth', token }));
