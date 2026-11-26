@@ -241,8 +241,8 @@ service cloud.firestore {
 
     // Collection: user_invites (Pre-registered user accounts created by Admin)
     match /user_invites/{inviteId} {
-      allow get: if isVerifiedUser() && isValidId(inviteId) && (isAdmin() || existing().email == request.auth.token.email.lower());
-      allow list: if isVerifiedUser() && (isAdmin() || existing().email == request.auth.token.email.lower());
+      allow get: if isValidId(inviteId) && (isAdmin() || (isVerifiedUser() && existing().email == request.auth.token.email.lower()));
+      allow list: if isAdmin() || (isVerifiedUser() && existing().email == request.auth.token.email.lower());
       allow create: if isAdmin()
         && isValidId(inviteId)
         && isValidUserInvite(incoming())
@@ -251,8 +251,7 @@ service cloud.firestore {
         && incoming().claimedByUid == ''
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isVerifiedUser()
-        && isValidId(inviteId)
+      allow update: if isValidId(inviteId)
         && isValidUserInvite(incoming())
         && incoming().invitedBy == existing().invitedBy
         && incoming().createdAt == existing().createdAt
@@ -261,7 +260,8 @@ service cloud.firestore {
           (isAdmin()
             && existing().claimed == false
             && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'role', 'unit', 'idNumber', 'phone', 'bio', 'active', 'updatedAt']))
-          || (existing().claimed == false
+          || (isVerifiedUser()
+            && existing().claimed == false
             && existing().email == request.auth.token.email.lower()
             && incoming().claimed == true
             && incoming().claimedByUid == request.auth.uid

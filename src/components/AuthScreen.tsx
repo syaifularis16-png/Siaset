@@ -3,7 +3,6 @@ import { ArrowLeft, Eye, EyeOff, LogOut } from 'lucide-react';
 import {
   completeSelfRegistration,
   registerWithUsernamePassword,
-  signInWithGoogle,
   signInWithUsernameOrEmail,
   signOutFirebase,
 } from '../lib/firebaseBackend';
@@ -92,7 +91,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     } else if (code === 'auth/operation-not-allowed') {
       setNeedsEmailPasswordProvider(true);
       setError(
-        'Metode login Email/Password belum diaktifkan di Firebase Console. Aktifkan terlebih dahulu atau gunakan Masuk dengan Google.'
+        'Metode login Email/Password belum diaktifkan di Firebase Console. Aktifkan terlebih dahulu agar login Nama pengguna & Kata sandi dapat digunakan.'
       );
     } else if (
       code === 'auth/invalid-credential' ||
@@ -142,18 +141,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       onAuthenticated(res.profile, res.privateInfo);
     } catch (err) {
       handleAuthException(err, 'Gagal mendaftarkan akun.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    resetErrors();
-    setLoading(true);
-    try {
-      await signInWithGoogle();
-    } catch (err) {
-      handleAuthException(err, 'Gagal masuk dengan Google.');
     } finally {
       setLoading(false);
     }
@@ -508,16 +495,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               </button>
             </form>
 
-            <div className="mt-5 rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 space-y-2.5 text-xs text-slate-600">
-              <button
-                type="button"
-                disabled={loading}
-                onClick={handleGoogleSignIn}
-                className="w-full py-2 px-3 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-semibold text-xs transition-colors cursor-pointer flex items-center justify-center gap-2"
-              >
-                <span>Masuk dengan Akun Google</span>
-              </button>
-              <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+            <div className="mt-5 rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 space-y-2 text-xs text-slate-600">
+              <div className="flex items-center justify-between text-[11px] text-slate-500">
                 <span>Belum punya akun pengguna?</span>
                 <button
                   type="button"
