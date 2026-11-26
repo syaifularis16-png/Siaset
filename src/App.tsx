@@ -310,14 +310,24 @@ export function App() {
       <div className="px-5 pt-5 pb-4 border-b border-white/10">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300">
-                <Shield className="w-4 h-4" />
+            {branding.logoDataUrl ? (
+              <div className="mb-2.5">
+                <img
+                  src={branding.logoDataUrl}
+                  alt={branding.appName}
+                  className="w-11 h-11 rounded-xl object-contain bg-white/95 p-1 shadow-sm"
+                />
               </div>
-              <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-300">
-                <GraduationCap className="w-4 h-4" />
+            ) : (
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-300">
+                  <Shield className="w-4 h-4" />
+                </div>
+                <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-300">
+                  <GraduationCap className="w-4 h-4" />
+                </div>
               </div>
-            </div>
+            )}
             <div className="text-xl font-extrabold italic tracking-tight text-white leading-none">
               {branding.appName}
             </div>

@@ -651,6 +651,10 @@
           "minLength": 1,
           "maxLength": 100
         },
+        "logoDataUrl": {
+          "type": "string",
+          "maxLength": 120000
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time"

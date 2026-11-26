@@ -2,12 +2,14 @@ export interface BrandingSettings {
   appName: string;
   appSubtitle: string;
   schoolName: string;
+  logoDataUrl?: string;
 }
 
 export const DEFAULT_BRANDING: BrandingSettings = {
   appName: 'SIPALAK',
   appSubtitle: 'Sistem Pelayanan Laboratorium Komputer',
   schoolName: 'SMK Negeri 1 Sambeng',
+  logoDataUrl: '',
 };
 
 export type SystemRole = 'admin' | 'teknisi' | 'guru' | 'siswa' | 'pengguna';

@@ -182,9 +182,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     <div className="min-h-screen sipalak-auth-bg flex items-center justify-center p-4">
       <div className="w-full max-w-[400px] bg-white rounded-2xl shadow-2xl border border-slate-200/80 p-7 sm:p-8 text-slate-900">
         <div>
-          <h1 className="text-[22px] font-extrabold tracking-tight text-[#1a2b4c] leading-none">
-            {branding.appName}
-          </h1>
+          <div className="flex items-center gap-3">
+            {branding.logoDataUrl && (
+              <img
+                src={branding.logoDataUrl}
+                alt={branding.appName}
+                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-200 p-1 shrink-0"
+              />
+            )}
+            <h1 className="text-[22px] font-extrabold tracking-tight text-[#1a2b4c] leading-none">
+              {branding.appName}
+            </h1>
+          </div>
           <h2 className="text-[19px] font-bold text-slate-900 mt-4 leading-snug">
             {headingTitle}
           </h2>

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { RotateCcw, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ImagePlus, RotateCcw, Trash2, Upload, X } from 'lucide-react';
 import { brandingApi } from '../lib/api';
 import { DEFAULT_BRANDING, type BrandingSettings } from '../types';
 
@@ -9,6 +9,41 @@ interface BrandingModalProps {
   onClose: () => void;
   onSaved: (next: BrandingSettings) => void;
   onNotify: (msg: string, type?: 'success' | 'error') => void;
+}
+
+async function resizeLogoFileToPngDataUrl(file: File): Promise<string> {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('File gambar tidak dapat dibaca.'));
+      el.src = objectUrl;
+    });
+
+    const maxDim = 256;
+    const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+    const targetW = Math.max(1, Math.round((img.width || maxDim) * scale));
+    const targetH = Math.max(1, Math.round((img.height || maxDim) * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Gagal memproses gambar logo.');
+    ctx.clearRect(0, 0, targetW, targetH);
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+
+    const pngUrl = canvas.toDataURL('image/png');
+    if (pngUrl.length <= 115000) return pngUrl;
+
+    const webpUrl = canvas.toDataURL('image/webp', 0.85);
+    if (webpUrl.length <= 115000) return webpUrl;
+
+    throw new Error('Ukuran logo setelah kompresi masih terlalu besar. Pilih gambar lain.');
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export const BrandingModal: React.FC<BrandingModalProps> = ({
@@ -21,25 +56,53 @@ export const BrandingModal: React.FC<BrandingModalProps> = ({
   const [appName, setAppName] = useState(branding.appName);
   const [appSubtitle, setAppSubtitle] = useState(branding.appSubtitle);
   const [schoolName, setSchoolName] = useState(branding.schoolName);
+  const [logoDataUrl, setLogoDataUrl] = useState(branding.logoDataUrl ?? '');
   const [saving, setSaving] = useState(false);
+  const [processingLogo, setProcessingLogo] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (open) {
       setAppName(branding.appName);
       setAppSubtitle(branding.appSubtitle);
       setSchoolName(branding.schoolName);
+      setLogoDataUrl(branding.logoDataUrl ?? '');
     }
   }, [open, branding]);
 
   if (!open) return null;
 
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      onNotify('Silakan pilih file gambar (PNG, JPG, WebP, atau SVG).', 'error');
+      return;
+    }
+    setProcessingLogo(true);
+    try {
+      const dataUrl = await resizeLogoFileToPngDataUrl(file);
+      setLogoDataUrl(dataUrl);
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : 'Gagal memproses logo.', 'error');
+    } finally {
+      setProcessingLogo(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
-      const saved = await brandingApi.update({ appName, appSubtitle, schoolName });
+      const saved = await brandingApi.update({
+        appName,
+        appSubtitle,
+        schoolName,
+        logoDataUrl,
+      });
       onSaved(saved);
-      onNotify('Identitas aplikasi berhasil diperbarui.');
+      onNotify('Identitas dan logo aplikasi berhasil diperbarui.');
       onClose();
     } catch (err) {
       onNotify(
@@ -55,6 +118,7 @@ export const BrandingModal: React.FC<BrandingModalProps> = ({
     setAppName(DEFAULT_BRANDING.appName);
     setAppSubtitle(DEFAULT_BRANDING.appSubtitle);
     setSchoolName(DEFAULT_BRANDING.schoolName);
+    setLogoDataUrl('');
   };
 
   return (
@@ -64,7 +128,7 @@ export const BrandingModal: React.FC<BrandingModalProps> = ({
           <div>
             <h3 className="font-bold text-slate-900">Ubah Identitas Aplikasi</h3>
             <p className="text-xs text-slate-500">
-              Sesuaikan nama aplikasi, layanan, dan nama sekolah atau instansi.
+              Sesuaikan logo, nama aplikasi, layanan, dan nama sekolah atau instansi.
             </p>
           </div>
           <button
@@ -76,7 +140,63 @@ export const BrandingModal: React.FC<BrandingModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[82vh] overflow-y-auto">
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1.5">
+              Logo Sekolah / Aplikasi
+            </label>
+            <div className="flex items-center gap-3.5 p-3 rounded-xl border border-slate-200 bg-slate-50/70">
+              <div className="w-14 h-14 rounded-xl bg-white border border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+                {logoDataUrl ? (
+                  <img
+                    src={logoDataUrl}
+                    alt="Pratinjau logo"
+                    className="w-full h-full object-contain p-1"
+                  />
+                ) : (
+                  <ImagePlus className="w-6 h-6 text-slate-300" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    disabled={processingLogo}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    {processingLogo ? 'Memproses...' : 'Unggah Logo'}
+                  </button>
+                  {logoDataUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setLogoDataUrl('')}
+                      className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-xs font-medium text-rose-600 inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Hapus
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={logoDataUrl.startsWith('data:') ? '' : logoDataUrl}
+                  onChange={(e) => setLogoDataUrl(e.target.value)}
+                  placeholder="Atau tempel URL logo (https://...)"
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:border-[#2563eb]"
+                />
+              </div>
+            </div>
+          </div>
+
           <div>
             <label className="block text-xs font-medium text-slate-700 mb-1">
               Nama Aplikasi *
@@ -141,7 +261,7 @@ export const BrandingModal: React.FC<BrandingModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={saving}
+                disabled={saving || processingLogo}
                 className="px-4 py-2 rounded-xl text-sm font-semibold bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-60 text-white cursor-pointer"
               >
                 {saving ? 'Menyimpan...' : 'Simpan'}

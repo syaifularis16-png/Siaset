@@ -807,16 +807,36 @@ export async function completeSelfRegistration(input: {
   };
 }
 
+function sanitizeLogoUrl(val: unknown): string {
+  if (typeof val !== 'string') return '';
+  const trimmed = val.trim();
+  if (!trimmed) return '';
+  if (trimmed.length > 120000) {
+    throw new Error('Ukuran logo terlalu besar. Gunakan gambar beresolusi lebih kecil.');
+  }
+  if (/^(https:\/\/|data:image\/(png|jpeg|jpg|webp);base64,|\/)/.test(trimmed)) {
+    return trimmed;
+  }
+  throw new Error('Format logo tidak valid. Unggah file gambar atau gunakan URL https://.');
+}
+
 export async function getFirestoreBranding(): Promise<BrandingSettings> {
   const path = 'settings/branding';
   try {
     const snap = await getDoc(doc(db, 'settings', 'branding'));
     if (!snap.exists()) return { ...DEFAULT_BRANDING };
     const d = snap.data();
+    let logoDataUrl = '';
+    try {
+      logoDataUrl = sanitizeLogoUrl(d.logoDataUrl);
+    } catch {
+      logoDataUrl = '';
+    }
     return {
       appName: clampStr(d.appName, 40) || DEFAULT_BRANDING.appName,
       appSubtitle: clampStr(d.appSubtitle, 120) || DEFAULT_BRANDING.appSubtitle,
       schoolName: clampStr(d.schoolName, 100) || DEFAULT_BRANDING.schoolName,
+      logoDataUrl,
     };
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, path);
@@ -834,10 +854,17 @@ export function subscribeFirestoreBranding(
         return;
       }
       const d = snap.data();
+      let logoDataUrl = '';
+      try {
+        logoDataUrl = sanitizeLogoUrl(d.logoDataUrl);
+      } catch {
+        logoDataUrl = '';
+      }
       onData({
         appName: clampStr(d.appName, 40) || DEFAULT_BRANDING.appName,
         appSubtitle: clampStr(d.appSubtitle, 120) || DEFAULT_BRANDING.appSubtitle,
         schoolName: clampStr(d.schoolName, 100) || DEFAULT_BRANDING.schoolName,
+        logoDataUrl,
       });
     },
     (err) => {
@@ -850,6 +877,7 @@ export async function saveFirestoreBranding(next: BrandingSettings): Promise<Bra
   const appName = clampStr(next.appName, 40);
   const appSubtitle = clampStr(next.appSubtitle, 120);
   const schoolName = clampStr(next.schoolName, 100);
+  const logoDataUrl = sanitizeLogoUrl(next.logoDataUrl ?? '');
   if (!appName || !appSubtitle || !schoolName) {
     throw new Error('Nama aplikasi, subjudul, dan nama instansi wajib diisi.');
   }
@@ -859,9 +887,10 @@ export async function saveFirestoreBranding(next: BrandingSettings): Promise<Bra
       appName,
       appSubtitle,
       schoolName,
+      logoDataUrl,
       updatedAt: serverTimestamp(),
     });
-    return { appName, appSubtitle, schoolName };
+    return { appName, appSubtitle, schoolName, logoDataUrl };
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }

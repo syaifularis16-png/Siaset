@@ -160,10 +160,11 @@ service cloud.firestore {
 
     function isValidBrandingSettings(data) {
       return data.keys().hasAll(['appName', 'appSubtitle', 'schoolName', 'updatedAt'])
-        && data.keys().hasOnly(['appName', 'appSubtitle', 'schoolName', 'updatedAt'])
+        && data.keys().hasOnly(['appName', 'appSubtitle', 'schoolName', 'logoDataUrl', 'updatedAt'])
         && data.appName is string && data.appName.size() >= 1 && data.appName.size() <= 40
         && data.appSubtitle is string && data.appSubtitle.size() >= 1 && data.appSubtitle.size() <= 120
         && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 100
+        && (!('logoDataUrl' in data) || (data.logoDataUrl is string && data.logoDataUrl.size() <= 120000 && (data.logoDataUrl == '' || data.logoDataUrl.matches('^(https://|data:image/(png|jpeg|jpg|webp);base64,|/).*'))))
         && data.updatedAt is timestamp;
     }
 

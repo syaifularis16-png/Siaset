@@ -28,11 +28,20 @@ export const AssetQrModal: React.FC<AssetQrModalProps> = ({
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <div>
-            <h3 className="font-semibold text-slate-900">Detail & Label QR Aset</h3>
-            <p className="text-xs text-slate-500">
-              {branding.appName} · {branding.schoolName}
-            </p>
+          <div className="flex items-center gap-2.5">
+            {branding.logoDataUrl && (
+              <img
+                src={branding.logoDataUrl}
+                alt={branding.appName}
+                className="w-8 h-8 rounded-lg object-contain bg-slate-50 border border-slate-200 p-0.5 shrink-0"
+              />
+            )}
+            <div>
+              <h3 className="font-semibold text-slate-900">Detail & Label QR Aset</h3>
+              <p className="text-xs text-slate-500">
+                {branding.appName} · {branding.schoolName}
+              </p>
+            </div>
           </div>
           <button
             type="button"
