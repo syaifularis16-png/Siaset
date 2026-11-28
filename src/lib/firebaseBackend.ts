@@ -788,7 +788,7 @@ async function resolveFirebaseSessionInternal(user: User): Promise<SessionResolu
         role: 'admin',
         unit: 'Lab Komputer Akuntansi',
         idNumber: '',
-        bio: 'Administrator SIPALAK',
+        bio: 'Administrator SI-ASET DIGITAL',
         active: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -996,6 +996,14 @@ function sanitizeLogoUrl(val: unknown): string {
   throw new Error('Format logo tidak valid. Unggah file gambar atau gunakan URL https://.');
 }
 
+function resolveBrandingAppName(raw: unknown): string {
+  const cleaned = clampStr(raw, 40);
+  if (!cleaned || cleaned.toUpperCase() === 'SIPALAK' || cleaned.toUpperCase() === 'SILAPAK') {
+    return DEFAULT_BRANDING.appName;
+  }
+  return cleaned;
+}
+
 export async function getFirestoreBranding(): Promise<BrandingSettings> {
   const path = 'settings/branding';
   try {
@@ -1009,7 +1017,7 @@ export async function getFirestoreBranding(): Promise<BrandingSettings> {
       logoDataUrl = '';
     }
     return {
-      appName: clampStr(d.appName, 40) || DEFAULT_BRANDING.appName,
+      appName: resolveBrandingAppName(d.appName),
       appSubtitle: clampStr(d.appSubtitle, 120) || DEFAULT_BRANDING.appSubtitle,
       schoolName: clampStr(d.schoolName, 100) || DEFAULT_BRANDING.schoolName,
       logoDataUrl,
@@ -1039,7 +1047,7 @@ export function subscribeFirestoreBranding(
         logoDataUrl = '';
       }
       onData({
-        appName: clampStr(d.appName, 40) || DEFAULT_BRANDING.appName,
+        appName: resolveBrandingAppName(d.appName),
         appSubtitle: clampStr(d.appSubtitle, 120) || DEFAULT_BRANDING.appSubtitle,
         schoolName: clampStr(d.schoolName, 100) || DEFAULT_BRANDING.schoolName,
         logoDataUrl,

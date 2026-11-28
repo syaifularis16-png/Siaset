@@ -207,7 +207,7 @@ export const BrandingModal: React.FC<BrandingModalProps> = ({
               maxLength={40}
               value={appName}
               onChange={(e) => setAppName(e.target.value)}
-              placeholder="SIPALAK"
+              placeholder="SI-ASET DIGITAL"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-[#2563eb]"
             />
           </div>

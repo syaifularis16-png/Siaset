@@ -6,7 +6,7 @@ export interface BrandingSettings {
 }
 
 export const DEFAULT_BRANDING: BrandingSettings = {
-  appName: 'SIPALAK',
+  appName: 'SI-ASET DIGITAL',
   appSubtitle: 'Sistem Pelayanan Laboratorium Komputer',
   schoolName: 'SMK Negeri 1 Sambeng',
   logoDataUrl: '',

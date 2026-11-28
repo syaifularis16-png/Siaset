@@ -179,7 +179,7 @@ export const UsersTab: React.FC<UsersTabProps> = ({
         <div>
           <h2 className="text-lg font-bold text-slate-900">Manajemen Pengguna</h2>
           <p className="text-sm text-slate-500">
-            Kelola akun akses guru, siswa, teknisi, dan administrator SIPALAK.
+            Kelola akun akses guru, siswa, teknisi, dan administrator SI-ASET DIGITAL.
           </p>
         </div>
         <button

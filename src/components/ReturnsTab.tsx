@@ -1301,7 +1301,7 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
                       await downloadLoanBarcodePng(
                         previewCardRef.current,
                         previewBarcodeLoan,
-                        'SIPALAK — Barcode Peminjaman'
+                        'SI-ASET DIGITAL — Barcode Peminjaman'
                       );
                       onNotify('Gambar barcode PNG berhasil diunduh untuk dikirim ke peminjam.');
                     } catch (err) {
