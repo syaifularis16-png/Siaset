@@ -47,6 +47,7 @@ import {
   type Asset,
   type AssetCategory,
   type AssetCondition,
+  type AssetLock,
   type Attendance,
   type BrandingSettings,
   type LabSchedule,
@@ -331,6 +332,18 @@ function mapLoanDoc(id: string, data: DocumentData): Loan {
       : 'Menunggu',
     notes: String(data.notes ?? ''),
     createdAt: toIsoString(data.createdAt),
+    updatedAt: toIsoString(data.updatedAt),
+  };
+}
+
+function mapAssetLockDoc(id: string, data: DocumentData): AssetLock {
+  const statusRaw = String(data.status ?? 'Disetujui');
+  return {
+    assetId: String(data.assetId ?? id),
+    loanId: String(data.loanId ?? ''),
+    requesterId: String(data.requesterId ?? ''),
+    status: statusRaw === 'Dipinjam' ? 'Dipinjam' : 'Disetujui',
+    labScope: String(data.labScope ?? 'smkn1sambeng'),
     updatedAt: toIsoString(data.updatedAt),
   };
 }
@@ -1009,9 +1022,11 @@ export async function getFirestoreBranding(): Promise<BrandingSettings> {
 export function subscribeFirestoreBranding(
   onData: (branding: BrandingSettings) => void
 ): Unsubscribe {
+  let hasLoaded = false;
   return onSnapshot(
     doc(db, 'settings', 'branding'),
     (snap) => {
+      hasLoaded = true;
       if (!snap.exists()) {
         onData({ ...DEFAULT_BRANDING });
         return;
@@ -1032,7 +1047,9 @@ export function subscribeFirestoreBranding(
     },
     (err) => {
       logFirestoreError(err, OperationType.GET, 'settings/branding');
-      onData({ ...DEFAULT_BRANDING });
+      if (!hasLoaded) {
+        onData({ ...DEFAULT_BRANDING });
+      }
     }
   );
 }
@@ -1062,7 +1079,7 @@ export async function saveFirestoreBranding(next: BrandingSettings): Promise<Bra
 
 export async function fetchFirestoreSnapshot(uid: string, isAdmin: boolean): Promise<AppDataSnapshot> {
   try {
-    const [assetsSnap, loansSnap, schedulesSnap, maintSnap, attSnap, usersSnap, invitesSnap] =
+    const [assetsSnap, loansSnap, assetLocksSnap, schedulesSnap, maintSnap, attSnap, usersSnap, invitesSnap] =
       await Promise.all([
         getDocs(query(collection(db, 'assets'), where('labScope', '==', 'smkn1sambeng'))),
         getDocs(
@@ -1070,6 +1087,7 @@ export async function fetchFirestoreSnapshot(uid: string, isAdmin: boolean): Pro
             ? collection(db, 'loans')
             : query(collection(db, 'loans'), where('requesterId', '==', uid))
         ),
+        getDocs(query(collection(db, 'asset_locks'), where('labScope', '==', 'smkn1sambeng'))),
         getDocs(query(collection(db, 'schedules'), where('labScope', '==', 'smkn1sambeng'))),
         getDocs(
           isAdmin
@@ -1097,6 +1115,7 @@ export async function fetchFirestoreSnapshot(uid: string, isAdmin: boolean): Pro
     const loans = loansSnap.docs
       .map((d) => mapLoanDoc(d.id, d.data()))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const assetLocks = assetLocksSnap.docs.map((d) => mapAssetLockDoc(d.id, d.data()));
     const schedules = schedulesSnap.docs
       .map((d) => mapScheduleDoc(d.id, d.data()))
       .sort((a, b) => `${b.date}${b.startTime}`.localeCompare(`${a.date}${a.startTime}`));
@@ -1115,9 +1134,70 @@ export async function fetchFirestoreSnapshot(uid: string, isAdmin: boolean): Pro
           .sort((a, b) => a.displayName.localeCompare(b.displayName))
       : [];
 
-    return { assets, loans, schedules, maintenances, attendances, users, invites };
+    return { assets, loans, assetLocks, schedules, maintenances, attendances, users, invites };
   } catch (err) {
     handleFirestoreError(err, OperationType.LIST, 'snapshot');
+  }
+}
+
+async function reconcileAdminAssetLocks(loans: Loan[], currentLocks: AssetLock[]): Promise<void> {
+  const activeLoanByAsset = new Map<string, Loan>();
+  const loanById = new Map<string, Loan>();
+  for (const loan of loans) {
+    loanById.set(loan.id, loan);
+    if (loan.status === 'Dipinjam' || loan.status === 'Disetujui') {
+      const prev = activeLoanByAsset.get(loan.assetId);
+      if (!prev || (prev.status === 'Disetujui' && loan.status === 'Dipinjam')) {
+        activeLoanByAsset.set(loan.assetId, loan);
+      }
+    }
+  }
+
+  const lockByAsset = new Map<string, AssetLock>();
+  for (const lock of currentLocks) {
+    lockByAsset.set(lock.assetId, lock);
+  }
+
+  const batch = writeBatch(db);
+  let opCount = 0;
+
+  for (const [assetId, activeLoan] of activeLoanByAsset.entries()) {
+    const existingLock = lockByAsset.get(assetId);
+    const lockRef = doc(db, 'asset_locks', assetId);
+    if (!existingLock) {
+      batch.set(lockRef, {
+        assetId,
+        loanId: activeLoan.id,
+        requesterId: activeLoan.requesterId,
+        status: activeLoan.status === 'Dipinjam' ? 'Dipinjam' : 'Disetujui',
+        labScope: 'smkn1sambeng',
+        updatedAt: serverTimestamp(),
+      });
+      opCount += 1;
+    } else if (
+      existingLock.loanId === activeLoan.id &&
+      (existingLock.status !== activeLoan.status ||
+        existingLock.requesterId !== activeLoan.requesterId)
+    ) {
+      batch.update(lockRef, {
+        requesterId: activeLoan.requesterId,
+        status: activeLoan.status === 'Dipinjam' ? 'Dipinjam' : 'Disetujui',
+        updatedAt: serverTimestamp(),
+      });
+      opCount += 1;
+    }
+  }
+
+  for (const lock of currentLocks) {
+    const linkedLoan = loanById.get(lock.loanId);
+    if (!linkedLoan || (linkedLoan.status !== 'Disetujui' && linkedLoan.status !== 'Dipinjam')) {
+      batch.delete(doc(db, 'asset_locks', lock.assetId));
+      opCount += 1;
+    }
+  }
+
+  if (opCount > 0) {
+    await batch.commit();
   }
 }
 
@@ -1128,6 +1208,23 @@ export function subscribeFirestoreSnapshot(
   onError: (err: unknown) => void
 ): Unsubscribe {
   const unsubs: Unsubscribe[] = [];
+  let latestLoans: Loan[] = [];
+  let latestLocks: AssetLock[] = [];
+  let hasLoans = false;
+  let hasLocks = false;
+  let reconciling = false;
+
+  const maybeReconcileLocks = () => {
+    if (!isAdmin || !hasLoans || !hasLocks || reconciling) return;
+    reconciling = true;
+    void reconcileAdminAssetLocks(latestLoans, latestLocks)
+      .catch(() => {
+        // Non-fatal background lock sync
+      })
+      .finally(() => {
+        reconciling = false;
+      });
+  };
 
   unsubs.push(
     onSnapshot(
@@ -1155,12 +1252,32 @@ export function subscribeFirestoreSnapshot(
         const loans = snap.docs
           .map((d) => mapLoanDoc(d.id, d.data()))
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        latestLoans = loans;
+        hasLoans = true;
         onUpdate((prev) => ({ ...prev, loans }));
+        maybeReconcileLocks();
       },
       (err) => {
         if (!auth.currentUser) return;
         logFirestoreError(err, OperationType.LIST, 'loans');
         onError(err);
+      }
+    )
+  );
+
+  unsubs.push(
+    onSnapshot(
+      query(collection(db, 'asset_locks'), where('labScope', '==', 'smkn1sambeng')),
+      (snap) => {
+        const assetLocks = snap.docs.map((d) => mapAssetLockDoc(d.id, d.data()));
+        latestLocks = assetLocks;
+        hasLocks = true;
+        onUpdate((prev) => ({ ...prev, assetLocks }));
+        maybeReconcileLocks();
+      },
+      (err) => {
+        if (!auth.currentUser) return;
+        logFirestoreError(err, OperationType.LIST, 'asset_locks');
       }
     )
   );
@@ -1615,7 +1732,14 @@ export async function handleFirebaseApiRequest<T>(
     if (!isAdmin) throw new Error('Hanya Administrator Lab yang dapat menghapus aset.');
     const id = path.slice('/api/assets/'.length);
     try {
-      await deleteDoc(doc(db, 'assets', id));
+      const lockRef = doc(db, 'asset_locks', id);
+      const lockSnap = await getDoc(lockRef);
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'assets', id));
+      if (lockSnap.exists()) {
+        batch.delete(lockRef);
+      }
+      await batch.commit();
       return { ok: true } as T;
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `assets/${id}`);
@@ -1626,13 +1750,36 @@ export async function handleFirebaseApiRequest<T>(
   if (path === '/api/loans' && m === 'POST') {
     const assetId = clampStr(body.assetId, 128);
     let assetSnap;
+    let lockSnap;
     try {
-      assetSnap = await getDoc(doc(db, 'assets', assetId));
+      [assetSnap, lockSnap] = await Promise.all([
+        getDoc(doc(db, 'assets', assetId)),
+        getDoc(doc(db, 'asset_locks', assetId)),
+      ]);
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, `assets/${assetId}`);
     }
     if (!assetSnap.exists()) {
       throw new Error('Aset yang dipilih tidak ditemukan.');
+    }
+    if (lockSnap.exists()) {
+      throw new Error(
+        'Perangkat ini sudah disetujui atau sedang dipinjam oleh pengguna lain dan belum dikembalikan.'
+      );
+    }
+    if (isAdmin) {
+      const activeLoansSnap = await getDocs(
+        query(collection(db, 'loans'), where('assetId', '==', assetId))
+      );
+      const existingActive = activeLoansSnap.docs.find((d) => {
+        const st = String(d.data().status ?? '');
+        return st === 'Disetujui' || st === 'Dipinjam';
+      });
+      if (existingActive) {
+        throw new Error(
+          'Perangkat ini sudah disetujui atau sedang dipinjam oleh pengguna lain dan belum dikembalikan.'
+        );
+      }
     }
     const assetData = assetSnap.data();
 
@@ -1700,12 +1847,43 @@ export async function handleFirebaseApiRequest<T>(
     }
     if (!existingSnap.exists()) throw new Error('Data peminjaman tidak ditemukan.');
     const existing = existingSnap.data();
+    const existingAssetId = String(existing.assetId ?? '');
+    const lockRef = doc(db, 'asset_locks', existingAssetId);
+    const lockSnap = existingAssetId ? await getDoc(lockRef) : null;
 
     let updatePayload: Record<string, unknown>;
+    let targetLockAction: 'upsert' | 'delete' | 'none' = 'none';
+    let targetLockStatus: 'Disetujui' | 'Dipinjam' = 'Disetujui';
+
     if (isAdmin) {
       const status = String(body.status || existing.status) as LoanStatus;
       if (!ALLOWED_LOAN_STATUSES.has(status)) {
         throw new Error('Status peminjaman tidak valid.');
+      }
+      if (status === 'Disetujui' || status === 'Dipinjam') {
+        if (lockSnap?.exists() && String(lockSnap.data()?.loanId ?? '') !== id) {
+          throw new Error(
+            'Perangkat ini sudah disetujui atau sedang dipinjam pada pengajuan lain dan belum dikembalikan.'
+          );
+        }
+        const activeSnap = await getDocs(
+          query(collection(db, 'loans'), where('assetId', '==', existingAssetId))
+        );
+        const conflicting = activeSnap.docs.find((d) => {
+          if (d.id === id) return false;
+          const st = String(d.data().status ?? '');
+          return st === 'Disetujui' || st === 'Dipinjam';
+        });
+        if (conflicting) {
+          const cData = conflicting.data();
+          throw new Error(
+            `Perangkat ini sudah ${String(cData.status).toLowerCase()} oleh ${String(cData.borrowerName || 'peminjam lain')} dan belum dikembalikan.`
+          );
+        }
+        targetLockAction = 'upsert';
+        targetLockStatus = status;
+      } else {
+        targetLockAction = 'delete';
       }
       updatePayload = {
         status,
@@ -1733,6 +1911,7 @@ export async function handleFirebaseApiRequest<T>(
           notes: body.notes !== undefined ? clampStr(body.notes, 240) : String(existing.notes ?? ''),
           updatedAt: serverTimestamp(),
         };
+        targetLockAction = 'delete';
       } else {
         if (existing.status !== 'Menunggu') {
           throw new Error('Peminjaman yang sudah diproses tidak dapat diubah.');
@@ -1751,7 +1930,40 @@ export async function handleFirebaseApiRequest<T>(
     }
 
     try {
-      await updateDoc(loanRef, updatePayload);
+      if (targetLockAction === 'none') {
+        await updateDoc(loanRef, updatePayload);
+      } else {
+        const batch = writeBatch(db);
+        batch.update(loanRef, updatePayload);
+        if (targetLockAction === 'upsert' && existingAssetId) {
+          if (!lockSnap?.exists()) {
+            batch.set(lockRef, {
+              assetId: existingAssetId,
+              loanId: id,
+              requesterId: String(existing.requesterId ?? ''),
+              status: targetLockStatus,
+              labScope: 'smkn1sambeng',
+              updatedAt: serverTimestamp(),
+            });
+          } else if (
+            lockSnap.data()?.status !== targetLockStatus ||
+            lockSnap.data()?.requesterId !== existing.requesterId
+          ) {
+            batch.update(lockRef, {
+              requesterId: String(existing.requesterId ?? ''),
+              status: targetLockStatus,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } else if (
+          targetLockAction === 'delete' &&
+          lockSnap?.exists() &&
+          String(lockSnap.data()?.loanId ?? '') === id
+        ) {
+          batch.delete(lockRef);
+        }
+        await batch.commit();
+      }
       return { ok: true } as T;
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `loans/${id}`);
@@ -1760,8 +1972,22 @@ export async function handleFirebaseApiRequest<T>(
 
   if (path.startsWith('/api/loans/') && m === 'DELETE') {
     const id = path.slice('/api/loans/'.length);
+    const loanRef = doc(db, 'loans', id);
     try {
-      await deleteDoc(doc(db, 'loans', id));
+      const loanSnap = await getDoc(loanRef);
+      if (isAdmin && loanSnap.exists()) {
+        const assetId = String(loanSnap.data().assetId ?? '');
+        const lockRef = doc(db, 'asset_locks', assetId);
+        const lockSnap = assetId ? await getDoc(lockRef) : null;
+        const batch = writeBatch(db);
+        batch.delete(loanRef);
+        if (lockSnap?.exists() && String(lockSnap.data()?.loanId ?? '') === id) {
+          batch.delete(lockRef);
+        }
+        await batch.commit();
+      } else {
+        await deleteDoc(loanRef);
+      }
       return { ok: true } as T;
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `loans/${id}`);

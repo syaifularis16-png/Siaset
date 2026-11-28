@@ -59,6 +59,7 @@ type TabKey =
 const EMPTY_SNAPSHOT: AppDataSnapshot = {
   assets: [],
   loans: [],
+  assetLocks: [],
   schedules: [],
   maintenances: [],
   attendances: [],
@@ -119,10 +120,19 @@ export function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Real-time branding listener
+  // Real-time branding listener (deferred past StrictMode mount/unmount cycle)
   useEffect(() => {
-    const unsub = subscribeFirestoreBranding(setBranding);
-    return () => unsub();
+    let active = true;
+    let unsub: (() => void) | null = null;
+    const timer = setTimeout(() => {
+      if (!active) return;
+      unsub = subscribeFirestoreBranding(setBranding);
+    }, 0);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      if (unsub) unsub();
+    };
   }, []);
 
   // Auth state observer
@@ -188,15 +198,25 @@ export function App() {
 
   useEffect(() => {
     if (!profileUid) return;
-    const unsub = subscribeFirestoreSnapshot(
-      profileUid,
-      isAdmin,
-      (updater) => setData(updater),
-      (err) => {
-        notify(formatApiError(err, 'Gagal menyinkronkan data Cloud Firestore.'), 'error');
-      }
-    );
-    return () => unsub();
+    let active = true;
+    let unsub: (() => void) | null = null;
+    const timer = setTimeout(() => {
+      if (!active) return;
+      unsub = subscribeFirestoreSnapshot(
+        profileUid,
+        isAdmin,
+        (updater) => setData(updater),
+        (err) => {
+          if (!active || !auth.currentUser) return;
+          notify(formatApiError(err, 'Gagal menyinkronkan data Cloud Firestore.'), 'error');
+        }
+      );
+    }, 0);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      if (unsub) unsub();
+    };
   }, [profileUid, isAdmin, notify]);
 
   const refreshSnapshot = useCallback(async () => {
@@ -560,6 +580,7 @@ export function App() {
             <AssetsTab
               assets={data.assets}
               loans={data.loans}
+              assetLocks={data.assetLocks}
               maintenances={data.maintenances}
               branding={branding}
               isAdmin={isAdmin}
@@ -571,6 +592,7 @@ export function App() {
             <LoansTab
               loans={data.loans}
               assets={data.assets}
+              assetLocks={data.assetLocks}
               profile={profile}
               branding={branding}
               isAdmin={isAdmin}

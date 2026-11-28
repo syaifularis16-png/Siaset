@@ -5,6 +5,7 @@ import {
   getDocFromServer,
   getFirestore,
   initializeFirestore,
+  memoryLocalCache,
   persistentLocalCache,
   persistentMultipleTabManager,
   type Firestore,
@@ -14,18 +15,36 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app = initializeApp(firebaseConfig);
 
 function createFirestoreInstance(): Firestore {
+  const databaseId = firebaseConfig.firestoreDatabaseId;
+  const transportSettings = {
+    experimentalForceLongPolling: true,
+    experimentalLongPollingOptions: { timeoutSeconds: 25 },
+  };
+
   try {
     return initializeFirestore(
       app,
       {
+        ...transportSettings,
         localCache: persistentLocalCache({
           tabManager: persistentMultipleTabManager(),
         }),
       },
-      firebaseConfig.firestoreDatabaseId
+      databaseId
     );
   } catch {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    try {
+      return initializeFirestore(
+        app,
+        {
+          ...transportSettings,
+          localCache: memoryLocalCache(),
+        },
+        databaseId
+      );
+    } catch {
+      return getFirestore(app, databaseId);
+    }
   }
 }
 

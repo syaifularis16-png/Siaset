@@ -57,9 +57,12 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     const careAssets = data.assets.filter((a) => a.condition === 'Perlu perawatan').length;
     const brokenAssets = data.assets.filter((a) => a.condition === 'Rusak').length;
 
-    const borrowedAssetIds = new Set(
-      data.loans.filter((l) => l.status === 'Dipinjam').map((l) => l.assetId)
-    );
+    const borrowedAssetIds = new Set([
+      ...data.assetLocks.map((l) => l.assetId),
+      ...data.loans
+        .filter((l) => l.status === 'Dipinjam' || l.status === 'Disetujui')
+        .map((l) => l.assetId),
+    ]);
     const currentlyBorrowed = borrowedAssetIds.size;
     const readyAssets = Math.max(0, goodAssets - currentlyBorrowed);
 

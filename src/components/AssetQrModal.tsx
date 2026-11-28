@@ -4,6 +4,7 @@ import { Printer, X } from 'lucide-react';
 import {
   DEFAULT_BRANDING,
   type Asset,
+  type AssetLock,
   type BrandingSettings,
   type Loan,
   type Maintenance,
@@ -13,6 +14,7 @@ interface AssetQrModalProps {
   asset: Asset | null;
   branding?: BrandingSettings;
   loans?: Loan[];
+  assetLocks?: AssetLock[];
   maintenances?: Maintenance[];
   onClose: () => void;
 }
@@ -23,6 +25,7 @@ export const AssetQrModal: React.FC<AssetQrModalProps> = ({
   asset,
   branding = DEFAULT_BRANDING,
   loans = [],
+  assetLocks = [],
   maintenances = [],
   onClose,
 }) => {
@@ -47,7 +50,10 @@ export const AssetQrModal: React.FC<AssetQrModalProps> = ({
     condition: asset.condition,
   });
 
-  const activeLoan = assetLoans.find((l) => l.status === 'Dipinjam');
+  const activeLoan = assetLoans.find(
+    (l) => l.status === 'Dipinjam' || l.status === 'Disetujui'
+  );
+  const activeLock = assetLocks.find((lock) => lock.assetId === asset.id);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -132,10 +138,13 @@ export const AssetQrModal: React.FC<AssetQrModalProps> = ({
                 {asset.brand} · {asset.category} · {asset.location}
               </p>
 
-              {activeLoan && (
+              {(activeLoan || activeLock) && (
                 <div className="mt-3 text-xs text-amber-700 font-medium">
-                  Sedang dipinjam oleh {activeLoan.borrowerName} ({activeLoan.unit}) s.d.{' '}
-                  {activeLoan.returnDate}
+                  {activeLoan
+                    ? `${activeLoan.status === 'Dipinjam' ? 'Sedang dipinjam' : 'Sudah disetujui'} oleh ${activeLoan.borrowerName} (${activeLoan.unit}) s.d. ${activeLoan.returnDate}`
+                    : activeLock?.status === 'Dipinjam'
+                      ? 'Sedang dipinjam (tidak tersedia untuk dipinjam)'
+                      : 'Sudah disetujui admin (tidak tersedia untuk dipinjam)'}
                 </div>
               )}
 

@@ -1,9 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   AlertTriangle,
   Check,
   Copy,
+  Download,
   FileCheck2,
   Pencil,
   Plus,
@@ -14,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { downloadLoanBarcodePng } from '../lib/imageBarcodeScanner';
 import {
   buildLoanQrPayload,
   getLoanRefCode,
@@ -27,6 +29,7 @@ import {
   PERSON_ROLES,
   todayIsoDate,
   type Asset,
+  type AssetLock,
   type BrandingSettings,
   type Loan,
   type LoanStatus,
@@ -37,6 +40,7 @@ import {
 interface LoansTabProps {
   loans: Loan[];
   assets: Asset[];
+  assetLocks?: AssetLock[];
   profile: UserProfile;
   branding?: BrandingSettings;
   isAdmin: boolean;
@@ -61,6 +65,7 @@ function datesOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string
 export const LoansTab: React.FC<LoansTabProps> = ({
   loans,
   assets,
+  assetLocks = [],
   profile,
   branding = DEFAULT_BRANDING,
   isAdmin,
@@ -114,6 +119,7 @@ export const LoansTab: React.FC<LoansTabProps> = ({
   const [receiptLoan, setReceiptLoan] = useState<Loan | null>(null);
   const [barcodeLoan, setBarcodeLoan] = useState<Loan | null>(null);
   const [copiedBarcodeId, setCopiedBarcodeId] = useState<string | null>(null);
+  const barcodeCardRef = useRef<HTMLDivElement | null>(null);
 
   const activeReceiptLoan = useMemo(() => {
     if (!receiptLoan) return null;
@@ -178,6 +184,50 @@ export const LoansTab: React.FC<LoansTabProps> = ({
     [assets, assetId]
   );
 
+  const lockedAssetInfoMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        loanId: string;
+        status: 'Disetujui' | 'Dipinjam';
+        borrowerName?: string;
+        borrowDate?: string;
+        returnDate?: string;
+      }
+    >();
+    for (const lock of assetLocks) {
+      map.set(lock.assetId, {
+        loanId: lock.loanId,
+        status: lock.status,
+      });
+    }
+    for (const l of loans) {
+      if (l.status === 'Disetujui' || l.status === 'Dipinjam') {
+        const prev = map.get(l.assetId);
+        if (!prev || prev.loanId === l.id || l.status === 'Dipinjam') {
+          map.set(l.assetId, {
+            loanId: l.id,
+            status: l.status,
+            borrowerName: l.borrowerName,
+            borrowDate: l.borrowDate,
+            returnDate: l.returnDate,
+          });
+        }
+      }
+    }
+    return map;
+  }, [assetLocks, loans]);
+
+  const selectedAssetLock = useMemo(() => {
+    if (editingLoan || !assetId) return null;
+    return lockedAssetInfoMap.get(assetId) ?? null;
+  }, [editingLoan, assetId, lockedAssetInfoMap]);
+
+  const allAssetsLocked = useMemo(
+    () => assets.length > 0 && assets.every((a) => lockedAssetInfoMap.has(a.id)),
+    [assets, lockedAssetInfoMap]
+  );
+
   const conflictingLoans = useMemo(() => {
     if (!assetId || !borrowDate || !returnDate) return [];
     return loans.filter((l) => {
@@ -190,7 +240,10 @@ export const LoansTab: React.FC<LoansTabProps> = ({
 
   const openCreate = () => {
     setEditingLoan(null);
-    const preferredAsset = assets.find((a) => a.condition === 'Baik') ?? assets[0];
+    const preferredAsset =
+      assets.find((a) => !lockedAssetInfoMap.has(a.id) && a.condition === 'Baik') ??
+      assets.find((a) => !lockedAssetInfoMap.has(a.id)) ??
+      null;
     setAssetId(preferredAsset?.id ?? '');
     setBorrowerName(profile.displayName);
     setBorrowerRole(defaultBorrowerRole);
@@ -242,6 +295,19 @@ export const LoansTab: React.FC<LoansTabProps> = ({
 
   const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editingLoan) {
+      if (!assetId) {
+        onNotify('Tidak ada perangkat yang tersedia untuk dipinjam saat ini.', 'error');
+        return;
+      }
+      if (lockedAssetInfoMap.has(assetId)) {
+        onNotify(
+          'Perangkat ini sudah disetujui atau sedang dipinjam oleh pengguna lain dan belum dikembalikan.',
+          'error'
+        );
+        return;
+      }
+    }
     if (returnDate < borrowDate) {
       onNotify('Tanggal kembali tidak boleh lebih awal dari tanggal pinjam.', 'error');
       return;
@@ -769,17 +835,58 @@ export const LoansTab: React.FC<LoansTabProps> = ({
                     editingLoan ? 'bg-slate-50 text-slate-600' : 'bg-white'
                   }`}
                 >
-                  {assets.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      [{a.code}] {a.name} ({a.condition})
-                    </option>
-                  ))}
+                  {!editingLoan && !assetId && (
+                    <option value="">-- Tidak ada perangkat tersedia --</option>
+                  )}
+                  {assets.map((a) => {
+                    const lockInfo = lockedAssetInfoMap.get(a.id);
+                    const isLocked = !editingLoan && Boolean(lockInfo);
+                    return (
+                      <option key={a.id} value={a.id} disabled={isLocked}>
+                        [{a.code}] {a.name} ({a.condition})
+                        {lockInfo
+                          ? ` — [${lockInfo.status === 'Dipinjam' ? 'Sedang Dipinjam' : 'Sudah Disetujui'} · Tidak Tersedia]`
+                          : ''}
+                      </option>
+                    );
+                  })}
                   {editingLoan && !assets.some((a) => a.id === editingLoan.assetId) && (
                     <option value={editingLoan.assetId}>
                       [{editingLoan.assetCode}] {editingLoan.assetName}
                     </option>
                   )}
                 </select>
+
+                {!editingLoan && allAssetsLocked && (
+                  <div className="mt-2 rounded-xl bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-700 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>
+                      Semua perangkat inventaris saat ini sudah disetujui admin atau sedang
+                      dipinjam sehingga belum dapat diajukan.
+                    </span>
+                  </div>
+                )}
+
+                {selectedAssetLock && (
+                  <div className="mt-2 rounded-xl bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-700 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>
+                      Perangkat ini{' '}
+                      <strong>
+                        {selectedAssetLock.status === 'Dipinjam'
+                          ? 'sedang dipinjam'
+                          : 'sudah disetujui oleh admin'}
+                      </strong>
+                      {selectedAssetLock.borrowerName
+                        ? ` (${selectedAssetLock.borrowerName})`
+                        : ''}
+                      {selectedAssetLock.borrowDate && selectedAssetLock.returnDate
+                        ? ` pada ${selectedAssetLock.borrowDate} → ${selectedAssetLock.returnDate}`
+                        : ''}
+                      , sehingga tidak dapat dipinjam oleh pengguna lain hingga dikembalikan.
+                    </span>
+                  </div>
+                )}
 
                 {selectedAsset && selectedAsset.condition !== 'Baik' && (
                   <div className="mt-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
@@ -791,7 +898,7 @@ export const LoansTab: React.FC<LoansTabProps> = ({
                   </div>
                 )}
 
-                {conflictingLoans.length > 0 && (
+                {!selectedAssetLock && conflictingLoans.length > 0 && (
                   <div className="mt-2 rounded-xl bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-700 flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>
@@ -961,7 +1068,7 @@ export const LoansTab: React.FC<LoansTabProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={saving || Boolean(selectedAssetLock) || (!editingLoan && !assetId)}
                   className="px-4 py-2 rounded-xl text-sm font-semibold bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-60 text-white cursor-pointer"
                 >
                   {saving
@@ -1294,7 +1401,11 @@ export const LoansTab: React.FC<LoansTabProps> = ({
               </button>
             </div>
             <div className="p-6 overflow-y-auto">
-              <div data-print-root="true" className="bg-white text-slate-900 space-y-4 text-center">
+              <div
+                ref={barcodeCardRef}
+                data-print-root="true"
+                className="bg-white text-slate-900 space-y-4 text-center"
+              >
                 <div className="pb-3 border-b border-slate-200">
                   <div className="text-xs font-extrabold uppercase tracking-wide text-slate-800">
                     {branding.appName} — {branding.schoolName}
@@ -1373,13 +1484,35 @@ export const LoansTab: React.FC<LoansTabProps> = ({
                 </dl>
               </div>
             </div>
-            <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+            <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-100 flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setBarcodeLoan(null)}
                 className="px-4 py-2 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-200/70 cursor-pointer"
               >
                 Tutup
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await downloadLoanBarcodePng(
+                      barcodeCardRef.current,
+                      activeBarcodeLoan,
+                      `${branding.appName} — ${branding.schoolName}`
+                    );
+                    onNotify('Gambar barcode PNG berhasil diunduh untuk dikirim ke peminjam.');
+                  } catch (err) {
+                    onNotify(
+                      err instanceof Error ? err.message : 'Gagal mengunduh gambar barcode.',
+                      'error'
+                    );
+                  }
+                }}
+                className="px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                Unduh Gambar PNG
               </button>
               <button
                 type="button"

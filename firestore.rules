@@ -158,6 +158,17 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidAssetLock(data) {
+      return data.keys().hasAll(['assetId', 'loanId', 'requesterId', 'status', 'labScope', 'updatedAt'])
+        && data.keys().hasOnly(['assetId', 'loanId', 'requesterId', 'status', 'labScope', 'updatedAt'])
+        && isValidId(data.assetId)
+        && isValidId(data.loanId)
+        && isValidId(data.requesterId)
+        && data.status is string && data.status in ['Disetujui', 'Dipinjam']
+        && data.labScope is string && data.labScope == 'smkn1sambeng'
+        && data.updatedAt is timestamp;
+    }
+
     function isValidBrandingSettings(data) {
       return data.keys().hasAll(['appName', 'appSubtitle', 'schoolName', 'updatedAt'])
         && data.keys().hasOnly(['appName', 'appSubtitle', 'schoolName', 'logoDataUrl', 'updatedAt'])
@@ -388,7 +399,8 @@ service cloud.firestore {
         && incoming().status == 'Menunggu'
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
-        && exists(/databases/$(database)/documents/assets/$(incoming().assetId));
+        && exists(/databases/$(database)/documents/assets/$(incoming().assetId))
+        && !exists(/databases/$(database)/documents/asset_locks/$(incoming().assetId));
       allow update: if isSignedIn()
         && isValidId(loanId)
         && isValidLoan(incoming())
@@ -398,7 +410,12 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           (isAdmin()
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes', 'returnDate', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'notes', 'returnDate', 'updatedAt'])
+            && (
+              incoming().status == existing().status
+              || !(incoming().status in ['Disetujui', 'Dipinjam'])
+              || getAfter(/databases/$(database)/documents/asset_locks/$(incoming().assetId)).data.loanId == loanId
+            ))
           || (existing().requesterId == request.auth.uid
             && existing().status == 'Menunggu'
             && incoming().status == 'Menunggu'
@@ -409,6 +426,35 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'returnDate', 'notes', 'updatedAt']))
         );
       allow delete: if isValidId(loanId) && (isAdmin() || (isSignedIn() && existing().requesterId == request.auth.uid && existing().status == 'Menunggu'));
+    }
+
+    // Collection: asset_locks (Non-PII lock preventing double borrowing of approved/borrowed assets)
+    match /asset_locks/{assetId} {
+      allow get: if isSignedIn() && isValidId(assetId);
+      allow list: if isSignedIn() && existing().labScope == 'smkn1sambeng';
+      allow create: if isAdmin()
+        && isValidId(assetId)
+        && isValidAssetLock(incoming())
+        && incoming().assetId == assetId
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/assets/$(assetId));
+      allow update: if isAdmin()
+        && isValidId(assetId)
+        && isValidAssetLock(incoming())
+        && incoming().assetId == existing().assetId
+        && incoming().loanId == existing().loanId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['requesterId', 'status', 'updatedAt']);
+      allow delete: if isSignedIn()
+        && isValidId(assetId)
+        && (
+          isAdmin()
+          || (
+            existing().requesterId == request.auth.uid
+            && exists(/databases/$(database)/documents/loans/$(existing().loanId))
+            && getAfter(/databases/$(database)/documents/loans/$(existing().loanId)).data.status == 'Dikembalikan'
+          )
+        );
     }
 
     // Collection: schedules (Jadwal Lab)

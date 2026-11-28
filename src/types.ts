@@ -103,6 +103,15 @@ export interface Loan {
   updatedAt: string;
 }
 
+export interface AssetLock {
+  assetId: string;
+  loanId: string;
+  requesterId: string;
+  status: 'Disetujui' | 'Dipinjam';
+  labScope: string;
+  updatedAt: string;
+}
+
 export interface LabSchedule {
   id: string;
   date: string;
@@ -154,6 +163,7 @@ export interface Attendance {
 export interface AppDataSnapshot {
   assets: Asset[];
   loans: Loan[];
+  assetLocks: AssetLock[];
   schedules: LabSchedule[];
   maintenances: Maintenance[];
   attendances: Attendance[];

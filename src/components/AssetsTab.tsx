@@ -18,6 +18,7 @@ import {
   type Asset,
   type AssetCategory,
   type AssetCondition,
+  type AssetLock,
   type BrandingSettings,
   type Loan,
   type Maintenance,
@@ -27,6 +28,7 @@ import { AssetQrModal } from './AssetQrModal';
 interface AssetsTabProps {
   assets: Asset[];
   loans?: Loan[];
+  assetLocks?: AssetLock[];
   maintenances?: Maintenance[];
   branding?: BrandingSettings;
   isAdmin: boolean;
@@ -118,6 +120,7 @@ function parseCsvAssets(text: string) {
 export const AssetsTab: React.FC<AssetsTabProps> = ({
   assets,
   loans = [],
+  assetLocks = [],
   maintenances = [],
   branding = DEFAULT_BRANDING,
   isAdmin,
@@ -147,14 +150,23 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
   const [importing, setImporting] = useState(false);
 
   const activeLoanByAsset = useMemo(() => {
-    const map = new Map<string, Loan>();
+    const map = new Map<string, { status: 'Disetujui' | 'Dipinjam'; borrowerName?: string }>();
+    for (const lock of assetLocks) {
+      map.set(lock.assetId, { status: lock.status });
+    }
     for (const loan of loans) {
-      if (loan.status === 'Dipinjam') {
-        map.set(loan.assetId, loan);
+      if (loan.status === 'Dipinjam' || loan.status === 'Disetujui') {
+        const existing = map.get(loan.assetId);
+        if (!existing || existing.status === 'Disetujui' || loan.status === 'Dipinjam') {
+          map.set(loan.assetId, {
+            status: loan.status,
+            borrowerName: loan.borrowerName,
+          });
+        }
       }
     }
     return map;
-  }, [loans]);
+  }, [assetLocks, loans]);
 
   const uniqueLocations = useMemo(() => {
     const set = new Set<string>();
@@ -411,7 +423,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
           </div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 px-4 py-3.5">
-          <div className="text-xs text-slate-500">Sedang Dipinjam</div>
+          <div className="text-xs text-slate-500">Disetujui / Dipinjam</div>
           <div className="text-2xl font-bold font-mono tabular-nums text-amber-600 mt-0.5">
             {kpis.borrowed}
           </div>
@@ -479,7 +491,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
         >
           <option value="ALL">Semua status</option>
           <option value="AVAILABLE">Tersedia</option>
-          <option value="BORROWED">Sedang Dipinjam</option>
+          <option value="BORROWED">Disetujui / Dipinjam</option>
           <option value="DUE_MAINT">Jatuh Tempo Servis</option>
         </select>
         <select
@@ -560,8 +572,20 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
                         <div>{asset.location}</div>
                         <div className="text-xs mt-0.5">
                           {activeLoan ? (
-                            <span className="text-amber-700 font-medium">
-                              Dipinjam: {activeLoan.borrowerName}
+                            <span
+                              className={
+                                activeLoan.status === 'Dipinjam'
+                                  ? 'text-amber-700 font-medium'
+                                  : 'text-sky-700 font-medium'
+                              }
+                            >
+                              {activeLoan.status === 'Dipinjam'
+                                ? activeLoan.borrowerName
+                                  ? `Dipinjam: ${activeLoan.borrowerName}`
+                                  : 'Sedang Dipinjam (Tidak Tersedia)'
+                                : activeLoan.borrowerName
+                                  ? `Disetujui: ${activeLoan.borrowerName}`
+                                  : 'Sudah Disetujui (Tidak Tersedia)'}
                             </span>
                           ) : asset.condition === 'Rusak' ? (
                             <span className="text-rose-600">Tidak siap pakai</span>
@@ -953,6 +977,7 @@ export const AssetsTab: React.FC<AssetsTabProps> = ({
         asset={qrAsset}
         branding={branding}
         loans={loans}
+        assetLocks={assetLocks}
         maintenances={maintenances}
         onClose={() => setQrAsset(null)}
       />

@@ -661,6 +661,44 @@
         }
       },
       "required": ["appName", "appSubtitle", "schoolName", "updatedAt"]
+    },
+    "AssetLock": {
+      "title": "AssetLock",
+      "description": "Non-PII lock record indicating an inventory asset has an active approved or borrowed loan and cannot be borrowed by others.",
+      "type": "object",
+      "properties": {
+        "assetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "loanId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "requesterId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Disetujui", "Dipinjam"]
+        },
+        "labScope": {
+          "type": "string",
+          "enum": ["smkn1sambeng"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["assetId", "loanId", "requesterId", "status", "labScope", "updatedAt"]
     }
   },
   "firestore": {
@@ -691,6 +729,10 @@
     "/loans/{loanId}": {
       "schema": { "$ref": "#/entities/Loan" },
       "description": "Asset borrowing and return requests."
+    },
+    "/asset_locks/{assetId}": {
+      "schema": { "$ref": "#/entities/AssetLock" },
+      "description": "Non-PII availability lock records for approved or currently borrowed assets."
     },
     "/schedules/{scheduleId}": {
       "schema": { "$ref": "#/entities/LabSchedule" },

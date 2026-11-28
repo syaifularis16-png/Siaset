@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import { Html5Qrcode } from 'html5-qrcode';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   AlertTriangle,
@@ -8,7 +8,9 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Download,
   ImageUp,
+  Loader2,
   PackageCheck,
   QrCode,
   RefreshCw,
@@ -18,6 +20,11 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import {
+  BARCODE_SUPPORTED_FORMATS,
+  downloadLoanBarcodePng,
+  scanBarcodeFromImageFile,
+} from '../lib/imageBarcodeScanner';
 import {
   buildLoanQrPayload,
   findMatchingLoanForScan,
@@ -43,19 +50,6 @@ interface ReturnsTabProps {
   onNotify: (msg: string, type?: 'success' | 'error') => void;
 }
 
-const SUPPORTED_FORMATS = [
-  Html5QrcodeSupportedFormats.QR_CODE,
-  Html5QrcodeSupportedFormats.CODE_128,
-  Html5QrcodeSupportedFormats.CODE_39,
-  Html5QrcodeSupportedFormats.CODE_93,
-  Html5QrcodeSupportedFormats.EAN_13,
-  Html5QrcodeSupportedFormats.EAN_8,
-  Html5QrcodeSupportedFormats.UPC_A,
-  Html5QrcodeSupportedFormats.UPC_E,
-  Html5QrcodeSupportedFormats.CODABAR,
-  Html5QrcodeSupportedFormats.ITF,
-];
-
 export const ReturnsTab: React.FC<ReturnsTabProps> = ({
   loans,
   assets,
@@ -71,12 +65,19 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const manualInputRef = useRef<HTMLInputElement | null>(null);
+  const previewCardRef = useRef<HTMLDivElement | null>(null);
+  const mountedRef = useRef(true);
+  const autoStartedRef = useRef(false);
+  const scanHandlingRef = useRef(false);
 
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameras, setCameras] = useState<Array<{ id: string; label: string }>>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
+  const [autoReturnOnCamera, setAutoReturnOnCamera] = useState<boolean>(!isAdmin);
+  const autoReturnOnCameraRef = useRef<boolean>(!isAdmin);
+  autoReturnOnCameraRef.current = autoReturnOnCamera;
 
   const [manualCode, setManualCode] = useState('');
   const [lastScannedRaw, setLastScannedRaw] = useState('');
@@ -87,6 +88,15 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
   const [copiedCode, setCopiedCode] = useState(false);
   const [returnNotes, setReturnNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [scanningImage, setScanningImage] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [autoReturnedInfo, setAutoReturnedInfo] = useState<{
+    assetCode: string;
+    assetName: string;
+    borrowerName: string;
+    timestamp: string;
+    sourceLabel: string;
+  } | null>(null);
 
   const canAccessLoan = useCallback(
     (l: Loan) => isAdmin || l.requesterId === profile.uid,
@@ -132,8 +142,10 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
   const stopCamera = useCallback(async () => {
     const instance = scannerRef.current;
     scannerRef.current = null;
-    setCameraActive(false);
-    setCameraStarting(false);
+    if (mountedRef.current) {
+      setCameraActive(false);
+      setCameraStarting(false);
+    }
     if (!instance) return;
     try {
       await instance.stop();
@@ -148,7 +160,9 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       void stopCamera();
     };
   }, [stopCamera]);
@@ -163,12 +177,13 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
 
       setLastScannedRaw(displayCode);
       setScanError(null);
+      setAutoReturnedInfo(null);
 
       if (!displayCode) {
         setMatchedLoanId(null);
         setVerifiedBarcodeCode('');
         setScanError('Kode barcode / QR tidak terbaca.');
-        return;
+        return { returnableLoan: null, displayCode: '' };
       }
 
       if (returnableLoan) {
@@ -177,7 +192,7 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
         setReturnNotes('');
         setManualCode(isAdmin ? getLoanRefCode(returnableLoan.id) : '');
         setScanError(null);
-        return;
+        return { returnableLoan, displayCode };
       }
 
       setMatchedLoanId(null);
@@ -197,14 +212,14 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
             `Pengajuan untuk [${otherStatusLoan.assetCode}] berstatus "${otherStatusLoan.status}" sehingga tidak dapat diproses pengembaliannya.`
           );
         }
-        return;
+        return { returnableLoan: null, displayCode };
       }
 
       if (matchedAssetOnly && foundAsset) {
         setScanError(
           `Kode aset [${foundAsset.code}] terdeteksi, namun pengembalian wajib memindai Barcode Peminjaman yang diberikan oleh Admin.`
         );
-        return;
+        return { returnableLoan: null, displayCode };
       }
 
       if (foundAsset) {
@@ -218,102 +233,296 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
             : 'Barcode tidak valid atau tidak sesuai dengan Barcode Peminjaman dari Admin untuk akun Anda.'
         );
       }
+      return { returnableLoan: null, displayCode };
     },
     [assets, canAccessLoan, isAdmin, loans]
   );
 
-  const startCamera = async (overrideCameraId?: string) => {
-    setCameraError(null);
-    setCameraStarting(true);
+  const submitAutoReturn = useCallback(
+    async (returnableLoan: Loan, displayCode: string, sourceLabel: string) => {
+      setSubmitting(true);
+      const timeStamp = currentHmTime();
+      const nextNotes = returnableLoan.notes
+        ? `${returnableLoan.notes} | Kembali otomatis via ${sourceLabel.toLowerCase()} (${today} ${timeStamp})`.slice(0, 240)
+        : `Dikembalikan otomatis via ${sourceLabel.toLowerCase()} barcode (${today} ${timeStamp})`;
 
-    try {
-      await stopCamera();
-
-      let deviceList = cameras;
       try {
-        deviceList = await Html5Qrcode.getCameras();
-        setCameras(deviceList);
-      } catch {
-        deviceList = [];
+        await apiFetch(`/api/loans/${returnableLoan.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            status: 'Dikembalikan',
+            returnDate: today,
+            notes: nextNotes,
+            scannedAdminBarcode: displayCode,
+          }),
+        });
+
+        setMatchedLoanId(null);
+        setVerifiedBarcodeCode('');
+        setManualCode('');
+        setLastScannedRaw('');
+        setReturnNotes('');
+        setScanError(null);
+        setAutoReturnedInfo({
+          assetCode: returnableLoan.assetCode,
+          assetName: returnableLoan.assetName,
+          borrowerName: returnableLoan.borrowerName,
+          timestamp: `${today} ${timeStamp}`,
+          sourceLabel,
+        });
+        onNotify(
+          `Barcode terverifikasi! Pengembalian [${returnableLoan.assetCode}] ${returnableLoan.assetName} otomatis selesai.`
+        );
+        await onRefresh();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Gagal memproses pengembalian otomatis.';
+        setScanError(message);
+        onNotify(message, 'error');
+      } finally {
+        setSubmitting(false);
       }
+    },
+    [onNotify, onRefresh, today]
+  );
 
-      const targetId = overrideCameraId || selectedCameraId;
-      const rearCamera = deviceList.find((c) => /back|rear|environment/i.test(c.label));
-      const cameraConfig: string | MediaTrackConstraints = targetId
-        ? targetId
-        : rearCamera
-          ? rearCamera.id
-          : deviceList[0]?.id || { facingMode: 'environment' };
+  const processScannedCodeRef = useRef(processScannedCode);
+  processScannedCodeRef.current = processScannedCode;
+  const submitAutoReturnRef = useRef(submitAutoReturn);
+  submitAutoReturnRef.current = submitAutoReturn;
 
-      if (!targetId && typeof cameraConfig === 'string') {
-        setSelectedCameraId(cameraConfig);
-      }
+  const startCamera = useCallback(
+    async (options?: { overrideCameraId?: string; silentOnFail?: boolean }) => {
+      const overrideCameraId = options?.overrideCameraId;
+      const silentOnFail = Boolean(options?.silentOnFail);
 
-      const instance = new Html5Qrcode(scannerRegionId, {
-        formatsToSupport: SUPPORTED_FORMATS,
-        verbose: false,
-      });
-      scannerRef.current = instance;
-
-      await instance.start(
-        cameraConfig,
-        {
-          fps: 10,
-          qrbox: { width: 240, height: 160 },
-          aspectRatio: 1.333,
-        },
-        (decodedText) => {
-          processScannedCode(decodedText);
-          void stopCamera();
-          onNotify('Barcode peminjaman berhasil dipindai.');
-        },
-        () => {
-          // Ignore per-frame decode misses
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+        if (!silentOnFail) {
+          setCameraError(
+            'Browser atau halaman ini tidak mendukung akses kamera langsung. Gunakan Scan dari Gambar atau Input Manual.'
+          );
         }
-      );
-
-      setCameraActive(true);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/NotAllowedError|Permission/i.test(msg)) {
-        setCameraError(
-          'Izin kamera ditolak. Izinkan akses kamera di browser atau gunakan Scan dari Gambar / Input Manual.'
-        );
-      } else if (/NotFoundError|Requested device not found/i.test(msg)) {
-        setCameraError(
-          'Perangkat kamera tidak ditemukan. Gunakan scanner USB atau ketik kode peminjaman / kode aset secara manual.'
-        );
-      } else {
-        setCameraError(
-          'Kamera tidak dapat dibuka pada perangkat ini. Gunakan Scan dari Gambar atau ketik kode.'
-        );
+        return;
       }
-      await stopCamera();
-    } finally {
-      setCameraStarting(false);
-    }
+
+      setCameraError(null);
+      setCameraStarting(true);
+      scanHandlingRef.current = false;
+
+      try {
+        await stopCamera();
+        if (!mountedRef.current) return;
+
+        let deviceList: Array<{ id: string; label: string }> = [];
+        try {
+          deviceList = await Html5Qrcode.getCameras();
+          if (mountedRef.current && deviceList.length > 0) {
+            setCameras(deviceList);
+          }
+        } catch {
+          deviceList = [];
+        }
+
+        const targetId = overrideCameraId ?? selectedCameraId;
+        const rearCamera = deviceList.find((c) =>
+          /back|rear|environment|belakang/i.test(c.label)
+        );
+
+        const candidates: Array<string | MediaTrackConstraints> = [];
+        if (targetId) {
+          candidates.push(targetId);
+        } else {
+          if (rearCamera) candidates.push(rearCamera.id);
+          candidates.push({ facingMode: 'environment' });
+          candidates.push({ facingMode: 'user' });
+          for (const cam of deviceList) {
+            if (!candidates.includes(cam.id)) {
+              candidates.push(cam.id);
+            }
+          }
+        }
+
+        const scanConfig = {
+          fps: 12,
+          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => ({
+            width: Math.max(160, Math.min(340, Math.floor(viewfinderWidth * 0.82))),
+            height: Math.max(110, Math.min(220, Math.floor(viewfinderHeight * 0.62))),
+          }),
+        };
+
+        const onDecoded = (decodedText: string) => {
+          if (scanHandlingRef.current) return;
+          scanHandlingRef.current = true;
+          void stopCamera();
+          const { returnableLoan, displayCode } = processScannedCodeRef.current(decodedText);
+          if (!returnableLoan) {
+            onNotify(
+              'Barcode terbaca, namun tidak cocok dengan Barcode Peminjaman Admin yang aktif.',
+              'error'
+            );
+            return;
+          }
+          if (autoReturnOnCameraRef.current) {
+            void submitAutoReturnRef.current(returnableLoan, displayCode, 'Kamera');
+          } else {
+            onNotify('Barcode peminjaman berhasil dipindai.');
+          }
+        };
+
+        let started = false;
+        let lastErr: unknown = null;
+
+        for (const candidate of candidates) {
+          if (!mountedRef.current) return;
+          const instance = new Html5Qrcode(scannerRegionId, {
+            formatsToSupport: BARCODE_SUPPORTED_FORMATS,
+            experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+            verbose: false,
+          });
+          scannerRef.current = instance;
+
+          try {
+            await instance.start(candidate, scanConfig, onDecoded, () => {
+              // Ignore per-frame decode misses
+            });
+            started = true;
+            if (typeof candidate === 'string' && mountedRef.current) {
+              setSelectedCameraId(candidate);
+            }
+            break;
+          } catch (err) {
+            lastErr = err;
+            scannerRef.current = null;
+            try {
+              await instance.stop();
+            } catch {
+              // Ignore
+            }
+            try {
+              instance.clear();
+            } catch {
+              // Ignore
+            }
+            const msg = err instanceof Error ? err.message : String(err);
+            if (/NotAllowedError|Permission|denied/i.test(msg)) {
+              break;
+            }
+          }
+        }
+
+        if (!started) {
+          throw lastErr ?? new Error('Tidak dapat memulai kamera.');
+        }
+
+        if (mountedRef.current) {
+          setCameraActive(true);
+          try {
+            const refreshed = await Html5Qrcode.getCameras();
+            if (mountedRef.current && refreshed.length > 0) {
+              setCameras(refreshed);
+              if (!selectedCameraId && !overrideCameraId) {
+                const preferred =
+                  refreshed.find((c) => /back|rear|environment|belakang/i.test(c.label)) ??
+                  refreshed[0];
+                if (preferred) setSelectedCameraId(preferred.id);
+              }
+            }
+          } catch {
+            // Ignore secondary enumeration failures
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!silentOnFail) {
+          if (/NotAllowedError|Permission|denied/i.test(msg)) {
+            setCameraError(
+              'Izin kamera belum diizinkan. Klik ikon kamera/gembok di address bar browser untuk mengizinkan kamera, lalu tekan "Aktifkan Kamera" lagi.'
+            );
+          } else if (/NotFoundError|Requested device not found|no camera/i.test(msg)) {
+            setCameraError(
+              'Perangkat kamera tidak ditemukan. Gunakan Scan dari Gambar, scanner USB, atau ketik kode secara manual.'
+            );
+          } else if (/NotReadableError|TrackStartError|in use/i.test(msg)) {
+            setCameraError(
+              'Kamera sedang digunakan oleh aplikasi lain. Tutup aplikasi lain lalu klik "Aktifkan Kamera".'
+            );
+          } else {
+            setCameraError(
+              'Kamera tidak dapat dibuka pada perangkat ini. Tekan "Aktifkan Kamera" untuk mencoba lagi atau gunakan Scan dari Gambar.'
+            );
+          }
+        }
+        await stopCamera();
+      } finally {
+        if (mountedRef.current) {
+          setCameraStarting(false);
+        }
+      }
+    },
+    [onNotify, scannerRegionId, selectedCameraId, stopCamera]
+  );
+
+  useEffect(() => {
+    if (autoStartedRef.current) return;
+    if (returnableLoans.length === 0) return;
+    autoStartedRef.current = true;
+    void startCamera({ silentOnFail: true });
+  }, [returnableLoans.length, startCamera]);
+
+  const handleSwitchCamera = () => {
+    if (cameras.length < 2) return;
+    const currentIdx = cameras.findIndex((c) => c.id === selectedCameraId);
+    const nextIdx = currentIdx >= 0 ? (currentIdx + 1) % cameras.length : 0;
+    const nextId = cameras[nextIdx].id;
+    setSelectedCameraId(nextId);
+    void startCamera({ overrideCameraId: nextId });
   };
+
+  const processImageFileAndAutoReturn = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith('image/') && !/\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name)) {
+        setScanError('File yang dipilih harus berupa gambar (PNG, JPG, WEBP).');
+        return;
+      }
+
+      setScanningImage(true);
+      setScanError(null);
+      setAutoReturnedInfo(null);
+
+      try {
+        const decoded = await scanBarcodeFromImageFile(file, fileRegionId);
+        const { returnableLoan, displayCode } = processScannedCode(decoded);
+
+        if (!returnableLoan) {
+          onNotify(
+            'Gambar terbaca, namun tidak cocok dengan peminjaman aktif yang dapat dikembalikan.',
+            'error'
+          );
+          return;
+        }
+
+        await submitAutoReturn(returnableLoan, displayCode, 'Gambar');
+      } catch (err) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : 'Barcode / QR tidak terdeteksi pada gambar tersebut. Pastikan gambar jelas dan tidak buram.';
+        setMatchedLoanId(null);
+        setVerifiedBarcodeCode('');
+        setScanError(message);
+        onNotify(message, 'error');
+      } finally {
+        setScanningImage(false);
+      }
+    },
+    [onNotify, processScannedCode, submitAutoReturn]
+  );
 
   const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-
-    setScanError(null);
-    try {
-      const fileScanner = new Html5Qrcode(fileRegionId, {
-        formatsToSupport: SUPPORTED_FORMATS,
-        verbose: false,
-      });
-      const decoded = await fileScanner.scanFile(file, false);
-      fileScanner.clear();
-      processScannedCode(decoded);
-      onNotify('Barcode dari gambar berhasil dibaca.');
-    } catch {
-      setScanError(
-        'Barcode / QR tidak terdeteksi pada gambar tersebut. Pastikan gambar jelas dan tidak buram.'
-      );
-    }
+    await processImageFileAndAutoReturn(file);
   };
 
   const handleManualSubmit = (e: React.FormEvent) => {
@@ -428,7 +637,18 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Left: Barcode Scanner & Confirmation */}
         <div className="lg:col-span-7 space-y-5">
-          <div className="bg-white rounded-2xl border border-slate-200/90 p-5 space-y-4">
+          <div
+            onPaste={(e) => {
+              const items = Array.from(e.clipboardData?.items ?? []);
+              const imgItem = items.find((it) => it.type.startsWith('image/'));
+              const pastedFile = imgItem?.getAsFile();
+              if (pastedFile) {
+                e.preventDefault();
+                void processImageFileAndAutoReturn(pastedFile);
+              }
+            }}
+            className="bg-white rounded-2xl border border-slate-200/90 p-5 space-y-4"
+          >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -442,8 +662,8 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
                   </h3>
                   <p className="text-xs text-slate-500">
                     {isAdmin
-                      ? 'Mendukung Barcode Peminjaman (No. Ref / QR / Code 128) & Kode Aset'
-                      : 'Arahkan kamera ke Barcode / QR Peminjaman yang ditunjukkan Admin'}
+                      ? 'Scan kamera atau unggah gambar foto barcode untuk verifikasi & pengembalian otomatis'
+                      : 'Scan kamera atau unggah gambar foto barcode dari Admin untuk pengembalian otomatis'}
                   </p>
                 </div>
               </div>
@@ -452,7 +672,7 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
                 {!cameraActive ? (
                   <button
                     type="button"
-                    disabled={cameraStarting}
+                    disabled={cameraStarting || scanningImage}
                     onClick={() => void startCamera()}
                     className="px-3.5 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-60 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
                   >
@@ -472,11 +692,16 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
 
                 <button
                   type="button"
+                  disabled={scanningImage}
                   onClick={() => fileInputRef.current?.click()}
-                  className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                  className="px-3 py-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-60 text-emerald-700 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
                 >
-                  <ImageUp className="w-4 h-4 text-slate-500" />
-                  Scan dari Gambar
+                  {scanningImage ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <ImageUp className="w-4 h-4" />
+                  )}
+                  {scanningImage ? 'Memverifikasi Gambar...' : 'Scan dari Gambar'}
                 </button>
                 <input
                   ref={fileInputRef}
@@ -488,51 +713,143 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
               </div>
             </div>
 
+            {/* Interactive Image Upload / Dropzone for Auto-Return */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                if (!scanningImage) fileInputRef.current?.click();
+              }}
+              onKeyDown={(e) => {
+                if ((e.key === 'Enter' || e.key === ' ') && !scanningImage) {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragActive(true);
+              }}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragActive(false);
+                const dropped = e.dataTransfer.files?.[0];
+                if (dropped && !scanningImage) {
+                  void processImageFileAndAutoReturn(dropped);
+                }
+              }}
+              className={`rounded-xl border-2 border-dashed px-4 py-3.5 transition-colors cursor-pointer flex items-center gap-3 ${
+                dragActive
+                  ? 'border-emerald-500 bg-emerald-50'
+                  : 'border-emerald-200/90 bg-emerald-50/40 hover:bg-emerald-50/80'
+              }`}
+            >
+              <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                {scanningImage ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <ImageUp className="w-5 h-5" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-semibold text-emerald-950">
+                  {scanningImage
+                    ? 'Membaca & memverifikasi gambar barcode...'
+                    : 'Upload / Tarik Foto Barcode dari Admin (Otomatis Mengembalikan)'}
+                </div>
+                <div className="text-[11px] text-emerald-700 mt-0.5">
+                  Pilih foto/screenshot barcode yang diberikan Admin (atau tempel Ctrl+V). Sistem
+                  akan memverifikasi dan langsung mencatat pengembalian otomatis.
+                </div>
+              </div>
+            </div>
+
             {cameras.length > 1 && (
-              <div className="flex items-center gap-2 text-xs">
-                <label className="text-slate-500 font-medium shrink-0">Pilih Kamera:</label>
-                <select
-                  value={selectedCameraId}
-                  onChange={(e) => {
-                    const nextId = e.target.value;
-                    setSelectedCameraId(nextId);
-                    if (cameraActive) {
-                      void startCamera(nextId);
-                    }
-                  }}
-                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs max-w-xs"
-                >
-                  {cameras.map((cam, idx) => (
-                    <option key={cam.id} value={cam.id}>
-                      {cam.label || `Kamera ${idx + 1}`}
-                    </option>
-                  ))}
-                </select>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <label className="text-slate-500 font-medium shrink-0">Pilih Kamera:</label>
+                  <select
+                    value={selectedCameraId}
+                    onChange={(e) => {
+                      const nextId = e.target.value;
+                      setSelectedCameraId(nextId);
+                      if (cameraActive) {
+                        void startCamera({ overrideCameraId: nextId });
+                      }
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs max-w-xs"
+                  >
+                    {cameras.map((cam, idx) => (
+                      <option key={cam.id} value={cam.id}>
+                        {cam.label || `Kamera ${idx + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {cameraActive && (
+                  <button
+                    type="button"
+                    onClick={handleSwitchCamera}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Ganti Kamera
+                  </button>
+                )}
               </div>
             )}
 
             {/* Camera viewport container (kept empty of React children for html5-qrcode) */}
-            <div className="relative rounded-xl border border-dashed border-slate-300 bg-slate-950/95 overflow-hidden min-h-[220px] flex items-center justify-center">
-              <div id={scannerRegionId} className="w-full" />
+            <div className="relative rounded-xl border border-dashed border-slate-300 bg-slate-950/95 overflow-hidden min-h-[240px] flex items-center justify-center">
+              <div
+                id={scannerRegionId}
+                className="w-full [&_video]:w-full [&_video]:max-h-[360px] [&_video]:object-cover"
+              />
               {!cameraActive && !cameraStarting && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center pointer-events-none">
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
                   <QrCode className="w-10 h-10 text-slate-400 mb-2" />
                   <p className="text-xs font-medium text-slate-200">
                     {isAdmin
-                      ? 'Kamera belum aktif. Tekan "Aktifkan Kamera" untuk memindai Barcode / QR Peminjaman maupun Label Aset.'
-                      : 'Kamera belum aktif. Tekan "Aktifkan Kamera" lalu scan Barcode / QR Peminjaman dari Admin.'}
+                      ? 'Kamera belum aktif. Klik tombol di bawah untuk memindai Barcode / QR Peminjaman atau Label Aset.'
+                      : 'Kamera belum aktif. Klik tombol di bawah untuk memindai Barcode / QR Peminjaman dari Admin.'}
                   </p>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    {isAdmin
-                      ? 'Atau gunakan barcode scanner USB / ketik No. Ref peminjaman atau kode aset di bawah ini.'
-                      : 'Atau pindai menggunakan barcode scanner USB pada kolom di bawah ini.'}
+                  <button
+                    type="button"
+                    disabled={cameraStarting || scanningImage}
+                    onClick={() => void startCamera()}
+                    className="mt-3 px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <Camera className="w-4 h-4" />
+                    Aktifkan Kamera Sekarang
+                  </button>
+                  <p className="text-[11px] text-slate-400 mt-2">
+                    Atau gunakan Scan dari Gambar di atas maupun scanner USB di bawah.
                   </p>
+                </div>
+              )}
+              {cameraStarting && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 text-slate-200 gap-2">
+                  <Loader2 className="w-7 h-7 animate-spin text-blue-400" />
+                  <span className="text-xs font-medium">Mengaktifkan kamera...</span>
                 </div>
               )}
             </div>
 
-            {/* Hidden container for file scanning */}
-            <div id={fileRegionId} className="hidden" />
+            <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoReturnOnCamera}
+                onChange={(e) => setAutoReturnOnCamera(e.target.checked)}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span>
+                Langsung verifikasi dan catat pengembalian otomatis saat kamera memindai barcode Admin
+              </span>
+            </label>
+
+            {/* Visually hidden container for file scanning */}
+            <div id={fileRegionId} className="sr-only" aria-hidden="true" />
 
             {cameraError && (
               <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-xs text-amber-800 flex items-start gap-2">
@@ -573,6 +890,31 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
                 </button>
               </div>
             </form>
+
+            {autoReturnedInfo && (
+              <div className="rounded-xl bg-emerald-50 border border-emerald-300 px-4 py-3.5 text-xs text-emerald-900 flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold text-emerald-950">
+                      Verifikasi {autoReturnedInfo.sourceLabel} Berhasil — Otomatis Dikembalikan
+                    </div>
+                    <div className="mt-0.5">
+                      Perangkat <strong>[{autoReturnedInfo.assetCode}] {autoReturnedInfo.assetName}</strong>{' '}
+                      atas nama <strong>{autoReturnedInfo.borrowerName}</strong> telah otomatis
+                      dicatat sebagai <strong>Dikembalikan</strong> ({autoReturnedInfo.timestamp}).
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoReturnedInfo(null)}
+                  className="p-1 rounded-md text-emerald-600 hover:bg-emerald-100 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {scanError && (
               <div className="rounded-xl bg-rose-50 border border-rose-200 px-3.5 py-3 text-xs text-rose-700 flex items-start justify-between gap-2">
@@ -890,7 +1232,7 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-6 overflow-y-auto space-y-4 text-center">
+            <div ref={previewCardRef} className="p-6 overflow-y-auto space-y-4 text-center">
               <div className="inline-flex flex-col items-center p-3.5 bg-white border border-slate-200 rounded-xl">
                 <QRCodeSVG
                   value={buildLoanQrPayload(previewBarcodeLoan)}
@@ -940,24 +1282,48 @@ export const ReturnsTab: React.FC<ReturnsTabProps> = ({
                 </div>
               </div>
             </div>
-            <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-100 flex justify-between gap-2">
+            <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-100 flex flex-wrap justify-between gap-2">
               <button
                 type="button"
                 onClick={() => {
                   processScannedCode(previewBarcodeLoan.id);
                   setPreviewBarcodeLoanId(null);
                 }}
-                className="px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
               >
                 Gunakan untuk Pengembalian
               </button>
-              <button
-                type="button"
-                onClick={() => setPreviewBarcodeLoanId(null)}
-                className="px-4 py-2 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-200/70 cursor-pointer"
-              >
-                Tutup
-              </button>
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await downloadLoanBarcodePng(
+                        previewCardRef.current,
+                        previewBarcodeLoan,
+                        'SIPALAK — Barcode Peminjaman'
+                      );
+                      onNotify('Gambar barcode PNG berhasil diunduh untuk dikirim ke peminjam.');
+                    } catch (err) {
+                      onNotify(
+                        err instanceof Error ? err.message : 'Gagal mengunduh gambar barcode.',
+                        'error'
+                      );
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#2563eb] hover:bg-[#1d4ed8] text-white inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Unduh Gambar PNG
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewBarcodeLoanId(null)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-medium text-slate-600 hover:bg-slate-200/70 cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
             </div>
           </div>
         </div>
