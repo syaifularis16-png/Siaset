@@ -12,6 +12,7 @@ import {
   type MaintenanceStatus,
   type PersonRole,
   type ScheduleStatus,
+  type ScheduleVenue,
   type SystemRole,
   type UserPrivateInfo,
   type UserProfile,
@@ -117,7 +118,22 @@ function readDb(): LocalDbState {
               returnTime: typeof loan?.returnTime === 'string' ? loan.returnTime : '',
             }))
           : [],
-        schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
+        schedules: Array.isArray(parsed.schedules)
+          ? parsed.schedules.map((sch) => ({
+              ...sch,
+              venue: sch?.venue === 'Multimedia' ? 'Multimedia' : 'Aula',
+              endDate:
+                typeof sch?.endDate === 'string' && sch.endDate >= (sch.date || '')
+                  ? sch.endDate
+                  : String(sch?.date || ''),
+              lessonPeriod: typeof sch?.lessonPeriod === 'string' ? sch.lessonPeriod : '',
+              setupType: typeof sch?.setupType === 'string' ? sch.setupType : '',
+              participantCount: Number(sch?.participantCount || 0) || 0,
+              equipmentNeeds: typeof sch?.equipmentNeeds === 'string' ? sch.equipmentNeeds : '',
+              notes: typeof sch?.notes === 'string' ? sch.notes : '',
+              adminNotes: typeof sch?.adminNotes === 'string' ? sch.adminNotes : '',
+            }))
+          : [],
         maintenances: Array.isArray(parsed.maintenances) ? parsed.maintenances : [],
         attendances: Array.isArray(parsed.attendances) ? parsed.attendances : [],
       };
@@ -744,10 +760,18 @@ export async function handleLocalApiRequest<T>(
   // --- SCHEDULES ---
   if (path === '/api/schedules' && m === 'POST') {
     const current = requireLocalAuth(state, token);
+    const venue: ScheduleVenue = body.venue === 'Multimedia' ? 'Multimedia' : 'Aula';
     const date = clampStr(body.date, 20);
+    const rawEndDate = clampStr(body.endDate, 20);
+    const endDate = rawEndDate && rawEndDate >= date ? rawEndDate : date;
     const startTime = clampStr(body.startTime, 10);
     const endTime = clampStr(body.endTime, 10);
+    const lessonPeriod = clampStr(body.lessonPeriod, 40);
     const activity = clampStr(body.activity, 120);
+    const setupType = clampStr(body.setupType, 60);
+    const participantCount = Math.max(0, Math.min(2000, Number(body.participantCount) || 0));
+    const equipmentNeeds = clampStr(body.equipmentNeeds, 240);
+    const notes = clampStr(body.notes, 300);
     const requesterName = clampStr(body.requesterName, 80);
     const requesterRole = String(body.requesterRole || 'Guru') as PersonRole;
     const unit = clampStr(body.unit, 60);
@@ -760,26 +784,52 @@ export async function handleLocalApiRequest<T>(
       !unit ||
       !ALLOWED_PERSON_ROLES.has(requesterRole)
     ) {
-      throw localHttpError('Data jadwal laboratorium belum lengkap.', 400);
+      throw localHttpError('Data jadwal peminjaman ruangan belum lengkap.', 400);
     }
-    const id = genId();
-    state.schedules.push({
-      id,
-      date,
-      startTime,
-      endTime,
-      activity,
-      requesterId: current.uid,
-      requesterName,
-      requesterRole,
-      unit,
-      status: 'Menunggu',
-      labScope: 'smkn1sambeng',
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    });
+    const rawSeries = Array.isArray(body.recurrenceDates) ? body.recurrenceDates : [];
+    const seriesItems = rawSeries
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const rec = item as Record<string, unknown>;
+        const d = clampStr(rec.date, 20);
+        const ed = clampStr(rec.endDate, 20);
+        if (!d) return null;
+        return { date: d, endDate: ed && ed >= d ? ed : d };
+      })
+      .filter((x): x is { date: string; endDate: string } => x !== null)
+      .slice(0, 12);
+
+    const targets = seriesItems.length > 1 ? seriesItems : [{ date, endDate }];
+    let firstId = '';
+    for (const slot of targets) {
+      const id = genId();
+      if (!firstId) firstId = id;
+      state.schedules.push({
+        id,
+        venue,
+        date: slot.date,
+        endDate: slot.endDate,
+        startTime,
+        endTime,
+        lessonPeriod,
+        activity,
+        setupType,
+        participantCount,
+        equipmentNeeds,
+        notes,
+        adminNotes: '',
+        requesterId: current.uid,
+        requesterName,
+        requesterRole,
+        unit,
+        status: 'Menunggu',
+        labScope: 'smkn1sambeng',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      });
+    }
     writeDb(state, 'schedules');
-    return { id } as T;
+    return { id: firstId, count: targets.length } as T;
   }
 
   if (path.startsWith('/api/schedules/') && m === 'PUT') {
@@ -797,19 +847,44 @@ export async function handleLocalApiRequest<T>(
         throw localHttpError('Status jadwal tidak valid.', 400);
       }
       s.status = status;
+      if (body.venue === 'Aula' || body.venue === 'Multimedia') s.venue = body.venue;
       if (body.date !== undefined) s.date = clampStr(body.date, 20);
+      if (body.endDate !== undefined) {
+        const ed = clampStr(body.endDate, 20);
+        s.endDate = ed && ed >= s.date ? ed : s.date;
+      }
       if (body.startTime !== undefined) s.startTime = clampStr(body.startTime, 10);
       if (body.endTime !== undefined) s.endTime = clampStr(body.endTime, 10);
+      if (body.lessonPeriod !== undefined) s.lessonPeriod = clampStr(body.lessonPeriod, 40);
       if (body.activity !== undefined) s.activity = clampStr(body.activity, 120);
+      if (body.setupType !== undefined) s.setupType = clampStr(body.setupType, 60);
+      if (body.participantCount !== undefined) {
+        s.participantCount = Math.max(0, Math.min(2000, Number(body.participantCount) || 0));
+      }
+      if (body.equipmentNeeds !== undefined) s.equipmentNeeds = clampStr(body.equipmentNeeds, 240);
+      if (body.notes !== undefined) s.notes = clampStr(body.notes, 300);
+      if (body.adminNotes !== undefined) s.adminNotes = clampStr(body.adminNotes, 300);
       if (body.unit !== undefined) s.unit = clampStr(body.unit, 60);
     } else {
       if (s.status !== 'Menunggu') {
         throw localHttpError('Jadwal yang sudah diproses tidak dapat diubah.', 403);
       }
+      if (body.venue === 'Aula' || body.venue === 'Multimedia') s.venue = body.venue;
       s.date = clampStr(body.date, 20) || s.date;
+      if (body.endDate !== undefined) {
+        const ed = clampStr(body.endDate, 20);
+        s.endDate = ed && ed >= s.date ? ed : s.date;
+      }
       s.startTime = clampStr(body.startTime, 10) || s.startTime;
       s.endTime = clampStr(body.endTime, 10) || s.endTime;
+      if (body.lessonPeriod !== undefined) s.lessonPeriod = clampStr(body.lessonPeriod, 40);
       s.activity = clampStr(body.activity, 120) || s.activity;
+      if (body.setupType !== undefined) s.setupType = clampStr(body.setupType, 60);
+      if (body.participantCount !== undefined) {
+        s.participantCount = Math.max(0, Math.min(2000, Number(body.participantCount) || 0));
+      }
+      if (body.equipmentNeeds !== undefined) s.equipmentNeeds = clampStr(body.equipmentNeeds, 240);
+      if (body.notes !== undefined) s.notes = clampStr(body.notes, 300);
       s.unit = clampStr(body.unit, 60) || s.unit;
     }
     s.updatedAt = nowIso;

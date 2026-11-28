@@ -25,6 +25,7 @@ export type AssetCategory =
 export type AssetCondition = 'Baik' | 'Perlu perawatan' | 'Rusak';
 export type LoanStatus = 'Menunggu' | 'Disetujui' | 'Dipinjam' | 'Dikembalikan' | 'Ditolak';
 export type ScheduleStatus = 'Menunggu' | 'Disetujui' | 'Ditolak' | 'Selesai';
+export type ScheduleVenue = 'Aula' | 'Multimedia';
 export type MaintenanceStatus = 'Dijadwalkan' | 'Dalam Proses' | 'Selesai';
 
 export interface UserProfile {
@@ -114,10 +115,18 @@ export interface AssetLock {
 
 export interface LabSchedule {
   id: string;
+  venue: ScheduleVenue;
   date: string;
+  endDate: string;
   startTime: string;
   endTime: string;
+  lessonPeriod: string;
   activity: string;
+  setupType: string;
+  participantCount: number;
+  equipmentNeeds: string;
+  notes: string;
+  adminNotes: string;
   requesterId: string;
   requesterName: string;
   requesterRole: PersonRole;
@@ -206,6 +215,41 @@ export const SCHEDULE_STATUSES: ScheduleStatus[] = [
   'Disetujui',
   'Ditolak',
   'Selesai',
+];
+
+export const SCHEDULE_VENUES: ScheduleVenue[] = ['Aula', 'Multimedia'];
+
+export const SCHEDULE_VENUE_META: Record<
+  ScheduleVenue,
+  { capacity: number; subtitle: string; defaultFacilities: string[] }
+> = {
+  Aula: {
+    capacity: 250,
+    subtitle: 'Ruang serbaguna besar untuk rapat, seminar, upacara, dan acara sekolah',
+    defaultFacilities: ['Sound System & Mic', 'Proyektor & Layar', 'Podium & Meja Tamu'],
+  },
+  Multimedia: {
+    capacity: 40,
+    subtitle: 'Ruang praktik komputer multimedia, editing, presentasi, dan live streaming',
+    defaultFacilities: ['Proyektor & Layar', 'Laptop Operator', 'Internet / Live Stream'],
+  },
+};
+
+export const SCHEDULE_SETUP_TYPES: string[] = [
+  'Reguler / KBM',
+  'Rapat / Koordinasi',
+  'Seminar / Sosialisasi',
+  'Praktikum / Ujian',
+  'Lomba / Acara Khusus',
+];
+
+export const SCHEDULE_EQUIPMENT_OPTIONS: string[] = [
+  'Proyektor & Layar',
+  'Sound System & Mic',
+  'Laptop Operator',
+  'Internet / Live Stream',
+  'Podium & Meja Tamu',
+  'Papan Tulis / Flipchart',
 ];
 
 export const MAINTENANCE_STATUSES: MaintenanceStatus[] = [

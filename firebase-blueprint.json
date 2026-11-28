@@ -369,12 +369,20 @@
     },
     "LabSchedule": {
       "title": "LabSchedule",
-      "description": "Computer laboratory booking schedule.",
+      "description": "Aula and Multimedia room booking schedule.",
       "type": "object",
       "properties": {
+        "venue": {
+          "type": "string",
+          "enum": ["Aula", "Multimedia"]
+        },
         "date": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 20
+        },
+        "endDate": {
+          "type": "string",
           "maxLength": 20
         },
         "startTime": {
@@ -387,10 +395,33 @@
           "minLength": 1,
           "maxLength": 10
         },
+        "lessonPeriod": {
+          "type": "string",
+          "maxLength": 40
+        },
         "activity": {
           "type": "string",
           "minLength": 1,
           "maxLength": 120
+        },
+        "setupType": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "participantCount": {
+          "type": "number"
+        },
+        "equipmentNeeds": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "adminNotes": {
+          "type": "string",
+          "maxLength": 300
         },
         "requesterId": {
           "type": "string",

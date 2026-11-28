@@ -181,11 +181,19 @@ service cloud.firestore {
 
     function isValidSchedule(data) {
       return data.keys().hasAll(['date', 'startTime', 'endTime', 'activity', 'requesterId', 'requesterName', 'requesterRole', 'unit', 'status', 'labScope', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['date', 'startTime', 'endTime', 'activity', 'requesterId', 'requesterName', 'requesterRole', 'unit', 'status', 'labScope', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['venue', 'date', 'endDate', 'startTime', 'endTime', 'lessonPeriod', 'activity', 'setupType', 'participantCount', 'equipmentNeeds', 'notes', 'adminNotes', 'requesterId', 'requesterName', 'requesterRole', 'unit', 'status', 'labScope', 'createdAt', 'updatedAt'])
+        && (!('venue' in data) || (data.venue is string && data.venue in ['Aula', 'Multimedia']))
         && data.date is string && data.date.size() >= 1 && data.date.size() <= 20
+        && (!('endDate' in data) || (data.endDate is string && data.endDate.size() <= 20))
         && data.startTime is string && data.startTime.size() >= 1 && data.startTime.size() <= 10
         && data.endTime is string && data.endTime.size() >= 1 && data.endTime.size() <= 10
+        && (!('lessonPeriod' in data) || (data.lessonPeriod is string && data.lessonPeriod.size() <= 40))
         && data.activity is string && data.activity.size() >= 1 && data.activity.size() <= 120
+        && (!('setupType' in data) || (data.setupType is string && data.setupType.size() <= 60))
+        && (!('participantCount' in data) || (data.participantCount is number && data.participantCount >= 0 && data.participantCount <= 2000))
+        && (!('equipmentNeeds' in data) || (data.equipmentNeeds is string && data.equipmentNeeds.size() <= 240))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 300))
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 300))
         && isValidId(data.requesterId)
         && data.requesterName is string && data.requesterName.size() >= 1 && data.requesterName.size() <= 80
         && data.requesterRole is string && data.requesterRole in ['Guru', 'Siswa', 'Teknisi', 'Staf']
@@ -457,7 +465,7 @@ service cloud.firestore {
         );
     }
 
-    // Collection: schedules (Jadwal Lab)
+    // Collection: schedules (Jadwal Peminjaman Aula & Multimedia)
     match /schedules/{scheduleId} {
       allow get: if isSignedIn() && isValidId(scheduleId);
       allow list: if isSignedIn() && existing().labScope == 'smkn1sambeng';
@@ -466,6 +474,7 @@ service cloud.firestore {
         && isValidSchedule(incoming())
         && incoming().requesterId == request.auth.uid
         && incoming().status == 'Menunggu'
+        && (!('adminNotes' in incoming()) || incoming().adminNotes == '')
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isSignedIn()
@@ -476,11 +485,11 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           (isAdmin()
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'date', 'startTime', 'endTime', 'activity', 'unit', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['venue', 'status', 'date', 'endDate', 'startTime', 'endTime', 'lessonPeriod', 'activity', 'setupType', 'participantCount', 'equipmentNeeds', 'notes', 'adminNotes', 'unit', 'updatedAt']))
           || (existing().requesterId == request.auth.uid
             && existing().status == 'Menunggu'
             && incoming().status == 'Menunggu'
-            && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'startTime', 'endTime', 'activity', 'unit', 'updatedAt']))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['venue', 'date', 'endDate', 'startTime', 'endTime', 'lessonPeriod', 'activity', 'setupType', 'participantCount', 'equipmentNeeds', 'notes', 'unit', 'updatedAt']))
         );
       allow delete: if isValidId(scheduleId) && (isAdmin() || (isSignedIn() && existing().requesterId == request.auth.uid && existing().status == 'Menunggu'));
     }

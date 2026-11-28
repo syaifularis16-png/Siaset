@@ -10,7 +10,13 @@ import {
   ArrowRight,
   Clock,
   Activity,
+  ScanBarcode,
 } from 'lucide-react';
+import {
+  effectiveEndDate,
+  getUserScheduleConflictNotifications,
+  scheduleCoversDate,
+} from '../lib/scheduleConflicts';
 import {
   ASSET_CATEGORIES,
   todayIsoDate,
@@ -25,7 +31,7 @@ interface OverviewTabProps {
   profile: UserProfile;
   branding?: BrandingSettings;
   onNavigate: (
-    tab: 'assets' | 'loans' | 'schedules' | 'maintenances' | 'attendances' | 'reports'
+    tab: 'assets' | 'loans' | 'returns' | 'schedules' | 'maintenances' | 'attendances' | 'reports'
   ) => void;
 }
 
@@ -67,6 +73,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     const readyAssets = Math.max(0, goodAssets - currentlyBorrowed);
 
     const waitingLoans = data.loans.filter((l) => l.status === 'Menunggu');
+    const returnableLoans = data.loans.filter(
+      (l) => l.status === 'Dipinjam' || l.status === 'Disetujui'
+    );
     const activeLoans = data.loans.filter(
       (l) => l.status === 'Menunggu' || l.status === 'Disetujui' || l.status === 'Dipinjam'
     );
@@ -76,7 +85,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
     const waitingSchedules = data.schedules.filter((s) => s.status === 'Menunggu');
     const todaySchedules = data.schedules
-      .filter((s) => s.date === today && s.status !== 'Ditolak')
+      .filter((s) => scheduleCoversDate(s, today) && s.status !== 'Ditolak')
       .sort((a, b) => a.startTime.localeCompare(b.startTime));
     const activeSchedules = data.schedules.filter(
       (s) => s.status === 'Menunggu' || s.status === 'Disetujui'
@@ -107,7 +116,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     const last7 = getLast7Days().map((d) => {
       const loansCount = data.loans.filter((l) => l.borrowDate === d.date).length;
       const attCount = data.attendances.filter((a) => a.date === d.date).length;
-      const schCount = data.schedules.filter((s) => s.date === d.date).length;
+      const schCount = data.schedules.filter((s) => scheduleCoversDate(s, d.date)).length;
       return {
         ...d,
         loansCount,
@@ -150,6 +159,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       currentlyBorrowed,
       readyAssets,
       waitingLoans,
+      returnableLoans,
       activeLoans,
       overdueLoans,
       waitingSchedules,
@@ -165,6 +175,8 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       loanByStatus,
     };
   }, [data, today]);
+
+  const isGuruOrSiswa = profile.role === 'guru' || profile.role === 'siswa';
 
   const stats = [
     {
@@ -187,21 +199,30 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       tab: 'loans' as const,
     },
     {
-      label: 'Jadwal Lab',
+      label: 'Aula & Multimedia',
       value: metrics.activeSchedules.length,
       sub: `${metrics.todaySchedules.length} agenda hari ini · ${metrics.waitingSchedules.length} menunggu`,
       icon: CalendarClock,
       color: 'bg-emerald-50 text-emerald-600 border-emerald-100',
       tab: 'schedules' as const,
     },
-    {
-      label: 'Perawatan & Kondisi',
-      value: metrics.openMaintenances.length,
-      sub: `${metrics.dueMaintenanceAssets.length} aset perlu perhatian / servis`,
-      icon: Wrench,
-      color: 'bg-rose-50 text-rose-600 border-rose-100',
-      tab: 'maintenances' as const,
-    },
+    isGuruOrSiswa
+      ? {
+          label: 'Pengembalian',
+          value: metrics.returnableLoans.length,
+          sub: `${metrics.returnableLoans.length} pinjaman siap discan kembali`,
+          icon: ScanBarcode,
+          color: 'bg-sky-50 text-sky-600 border-sky-100',
+          tab: 'returns' as const,
+        }
+      : {
+          label: 'Perawatan & Kondisi',
+          value: metrics.openMaintenances.length,
+          sub: `${metrics.dueMaintenanceAssets.length} aset perlu perhatian / servis`,
+          icon: Wrench,
+          color: 'bg-rose-50 text-rose-600 border-rose-100',
+          tab: 'maintenances' as const,
+        },
   ];
 
   const alerts: Array<{
@@ -209,9 +230,25 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     title: string;
     detail: string;
     tone: 'danger' | 'warn' | 'info';
-    tab: 'loans' | 'schedules' | 'maintenances' | 'assets';
+    tab: 'loans' | 'returns' | 'schedules' | 'maintenances' | 'assets';
   }> = [];
 
+  const myScheduleConflicts = useMemo(
+    () => getUserScheduleConflictNotifications(data.schedules, profile.uid),
+    [data.schedules, profile.uid]
+  );
+
+  if (myScheduleConflicts.length > 0) {
+    const first = myScheduleConflicts[0];
+    const other = first.conflictsWith[0];
+    alerts.push({
+      id: 'my-schedule-conflicts',
+      title: `${myScheduleConflicts.length} pengajuan Aula & Multimedia Anda mengalami bentrok waktu`,
+      detail: `Ruang ${first.schedule.venue} (${first.schedule.date} ${first.schedule.startTime}–${first.schedule.endTime}) bentrok dengan "${other.activity}" (${other.startTime}–${other.endTime}).`,
+      tone: 'danger',
+      tab: 'schedules',
+    });
+  }
   if (metrics.overdueLoans.length > 0) {
     alerts.push({
       id: 'overdue-loans',
@@ -221,14 +258,14 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         .map((l) => `${l.assetName} (${l.borrowerName})`)
         .join(', '),
       tone: 'danger',
-      tab: 'loans',
+      tab: isGuruOrSiswa ? 'returns' : 'loans',
     });
   }
   if (metrics.waitingLoans.length > 0) {
     alerts.push({
       id: 'waiting-loans',
       title: `${metrics.waitingLoans.length} pengajuan peminjaman menunggu persetujuan`,
-      detail: 'Tinjau, setujui, atau beri catatan penolakan pada modul Peminjaman.',
+      detail: 'Tinjau atau pantau status pengajuan pada modul Peminjaman.',
       tone: 'warn',
       tab: 'loans',
     });
@@ -236,13 +273,13 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   if (metrics.waitingSchedules.length > 0) {
     alerts.push({
       id: 'waiting-schedules',
-      title: `${metrics.waitingSchedules.length} pengajuan jadwal lab belum dikonfirmasi`,
-      detail: 'Periksa potensi bentrok jam praktik di modul Jadwal Lab.',
+      title: `${metrics.waitingSchedules.length} pengajuan peminjaman Aula & Multimedia belum dikonfirmasi`,
+      detail: 'Periksa potensi bentrok jam peminjaman di modul Aula & Multimedia.',
       tone: 'info',
       tab: 'schedules',
     });
   }
-  if (metrics.dueMaintenanceAssets.length > 0) {
+  if (!isGuruOrSiswa && metrics.dueMaintenanceAssets.length > 0) {
     alerts.push({
       id: 'due-maint',
       title: `${metrics.dueMaintenanceAssets.length} aset membutuhkan perawatan atau jatuh tempo servis`,
@@ -273,28 +310,57 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onNavigate('attendances')}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold cursor-pointer whitespace-nowrap"
-          >
-            <UserCheck className="w-4 h-4" />
-            Absensi ({metrics.activeVisitors.length} di lab)
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('loans')}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-sm font-semibold cursor-pointer whitespace-nowrap"
-          >
-            Kelola Peminjaman
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('reports')}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium cursor-pointer whitespace-nowrap"
-          >
-            Laporan Resmi
-          </button>
+          {isGuruOrSiswa ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onNavigate('loans')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-sm font-semibold cursor-pointer whitespace-nowrap"
+              >
+                Ajukan Peminjaman
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('returns')}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold cursor-pointer whitespace-nowrap"
+              >
+                <ScanBarcode className="w-4 h-4" />
+                Pengembalian ({metrics.returnableLoans.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('schedules')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium cursor-pointer whitespace-nowrap"
+              >
+                Aula & Multimedia
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => onNavigate('attendances')}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold cursor-pointer whitespace-nowrap"
+              >
+                <UserCheck className="w-4 h-4" />
+                Absensi ({metrics.activeVisitors.length} di lab)
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('loans')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-sm font-semibold cursor-pointer whitespace-nowrap"
+              >
+                Kelola Peminjaman
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('reports')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium cursor-pointer whitespace-nowrap"
+              >
+                Laporan Resmi
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -470,7 +536,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             <div>
               <h3 className="font-semibold text-slate-900">Aktivitas 7 Hari Terakhir</h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Gabungan peminjaman, jadwal praktik, dan absensi kunjungan lab.
+                {isGuruOrSiswa
+                  ? 'Gabungan peminjaman barang serta jadwal Aula & Multimedia.'
+                  : 'Gabungan peminjaman, jadwal ruangan, dan absensi kunjungan.'}
               </p>
             </div>
             <Activity className="w-4 h-4 text-slate-400" />
@@ -547,7 +615,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Clock className="w-4 h-4 text-emerald-600" />
-              <h3 className="font-semibold text-slate-900">Agenda Lab Hari Ini & Terbaru</h3>
+              <h3 className="font-semibold text-slate-900">Agenda Aula & Multimedia Hari Ini</h3>
             </div>
             <button
               type="button"
@@ -559,97 +627,155 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
           {data.schedules.length === 0 ? (
             <p className="text-sm text-slate-500 py-6 text-center">
-              Belum ada jadwal penggunaan laboratorium.
+              Belum ada jadwal peminjaman Aula atau Multimedia.
             </p>
           ) : (
             <div className="divide-y divide-slate-100">
               {(metrics.todaySchedules.length > 0
                 ? metrics.todaySchedules
                 : data.schedules.slice(0, 5)
-              ).map((s) => (
-                <div key={s.id} className="py-3 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-800 truncate">{s.activity}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {s.date} · {s.startTime}–{s.endTime} · {s.requesterName} ({s.unit})
-                    </p>
+              ).map((s) => {
+                const ed = effectiveEndDate(s);
+                const dateDisplay = ed !== s.date ? `${s.date} s/d ${ed}` : s.date;
+                return (
+                  <div key={s.id} className="py-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-800 truncate">
+                        [{s.venue}] {s.activity}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {dateDisplay} · {s.startTime}–{s.endTime} · {s.requesterName} ({s.unit})
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 text-xs font-semibold ${
+                        s.status === 'Disetujui'
+                          ? 'text-emerald-700'
+                          : s.status === 'Menunggu'
+                            ? 'text-amber-700'
+                            : s.status === 'Ditolak'
+                              ? 'text-rose-600'
+                              : 'text-slate-600'
+                      }`}
+                    >
+                      {s.status}
+                    </span>
                   </div>
-                  <span
-                    className={`shrink-0 text-xs font-semibold ${
-                      s.status === 'Disetujui'
-                        ? 'text-emerald-700'
-                        : s.status === 'Menunggu'
-                          ? 'text-amber-700'
-                          : s.status === 'Ditolak'
-                            ? 'text-rose-600'
-                            : 'text-slate-600'
-                    }`}
-                  >
-                    {s.status}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-slate-900">Pengunjung Aktif & Perawatan Terbaru</h3>
-            <button
-              type="button"
-              onClick={() => onNavigate('attendances')}
-              className="text-xs font-semibold text-[#2563eb] hover:text-[#1d4ed8] cursor-pointer"
-            >
-              Buka absensi
-            </button>
-          </div>
-
-          {metrics.activeVisitors.length === 0 && data.maintenances.length === 0 ? (
-            <p className="text-sm text-slate-500 py-6 text-center">
-              Belum ada pengunjung aktif di lab atau log perawatan berjalan.
-            </p>
+          {isGuruOrSiswa ? (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-slate-900">Peminjaman Saya Terbaru</h3>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('loans')}
+                  className="text-xs font-semibold text-[#2563eb] hover:text-[#1d4ed8] cursor-pointer"
+                >
+                  Lihat peminjaman
+                </button>
+              </div>
+              {data.loans.length === 0 ? (
+                <p className="text-sm text-slate-500 py-6 text-center">
+                  Belum ada riwayat peminjaman barang inventaris.
+                </p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {data.loans.slice(0, 5).map((loan) => (
+                    <div key={loan.id} className="py-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 truncate">
+                          {loan.assetName} ({loan.assetCode})
+                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5 truncate">
+                          {loan.borrowDate} → {loan.returnDate} · {loan.purpose}
+                        </p>
+                      </div>
+                      <span
+                        className={`text-xs font-semibold shrink-0 ${
+                          loan.status === 'Disetujui'
+                            ? 'text-emerald-700'
+                            : loan.status === 'Dipinjam'
+                              ? 'text-blue-700'
+                              : loan.status === 'Menunggu'
+                                ? 'text-amber-700'
+                                : loan.status === 'Ditolak'
+                                  ? 'text-rose-600'
+                                  : 'text-slate-600'
+                        }`}
+                      >
+                        {loan.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           ) : (
-            <div className="divide-y divide-slate-100">
-              {metrics.activeVisitors.slice(0, 3).map((att) => (
-                <div key={att.id} className="py-3 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-800 truncate">
-                      {att.visitorName}
-                    </p>
-                    <p className="text-xs text-slate-500 mt-0.5 truncate">
-                      Masuk {att.checkInTime} · {att.unit} · {att.workstation || 'Tanpa PC'}
-                    </p>
-                  </div>
-                  <span className="text-xs font-semibold text-emerald-700 shrink-0">
-                    Di Lab
-                  </span>
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-slate-900">Pengunjung Aktif & Perawatan Terbaru</h3>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('attendances')}
+                  className="text-xs font-semibold text-[#2563eb] hover:text-[#1d4ed8] cursor-pointer"
+                >
+                  Buka absensi
+                </button>
+              </div>
+
+              {metrics.activeVisitors.length === 0 && data.maintenances.length === 0 ? (
+                <p className="text-sm text-slate-500 py-6 text-center">
+                  Belum ada pengunjung aktif di lab atau log perawatan berjalan.
+                </p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {metrics.activeVisitors.slice(0, 3).map((att) => (
+                    <div key={att.id} className="py-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 truncate">
+                          {att.visitorName}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5 truncate">
+                          Masuk {att.checkInTime} · {att.unit} · {att.workstation || 'Tanpa PC'}
+                        </p>
+                      </div>
+                      <span className="text-xs font-semibold text-emerald-700 shrink-0">
+                        Di Lab
+                      </span>
+                    </div>
+                  ))}
+                  {data.maintenances.slice(0, 3).map((m) => (
+                    <div key={m.id} className="py-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 truncate">
+                          {m.assetName} — {m.issue}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5 truncate">
+                          {m.maintenanceDate} · Teknisi: {m.technicianName}
+                        </p>
+                      </div>
+                      <span
+                        className={`text-xs font-semibold shrink-0 ${
+                          m.status === 'Selesai'
+                            ? 'text-emerald-700'
+                            : m.status === 'Dalam Proses'
+                              ? 'text-blue-700'
+                              : 'text-amber-700'
+                        }`}
+                      >
+                        {m.status}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              {data.maintenances.slice(0, 3).map((m) => (
-                <div key={m.id} className="py-3 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-800 truncate">
-                      {m.assetName} — {m.issue}
-                    </p>
-                    <p className="text-xs text-slate-500 mt-0.5 truncate">
-                      {m.maintenanceDate} · Teknisi: {m.technicianName}
-                    </p>
-                  </div>
-                  <span
-                    className={`text-xs font-semibold shrink-0 ${
-                      m.status === 'Selesai'
-                        ? 'text-emerald-700'
-                        : m.status === 'Dalam Proses'
-                          ? 'text-blue-700'
-                          : 'text-amber-700'
-                    }`}
-                  >
-                    {m.status}
-                  </span>
-                </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
       </div>

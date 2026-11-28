@@ -16,9 +16,12 @@ import {
   Shield,
   Pencil,
   ScanBarcode,
+  Bell,
+  AlertTriangle,
 } from 'lucide-react';
 import { authApi, formatApiError } from './lib/api';
 import { auth } from './lib/firebase';
+import { getUserScheduleConflictNotifications } from './lib/scheduleConflicts';
 import {
   resolveFirebaseSession,
   subscribeFirestoreBranding,
@@ -102,8 +105,11 @@ export function App() {
   const [brandingModalOpen, setBrandingModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const profileUidRef = useRef<string | null>(null);
+  const notifiedConflictKeysRef = useRef<Set<string>>(new Set());
+  const notifContainerRef = useRef<HTMLDivElement | null>(null);
   profileUidRef.current = profile?.uid ?? null;
 
   useEffect(() => {
@@ -116,7 +122,7 @@ export function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 3500);
+    const timer = setTimeout(() => setToast(null), toast.type === 'error' ? 5500 : 3500);
     return () => clearTimeout(timer);
   }, [toast]);
 
@@ -165,7 +171,12 @@ export function App() {
           setAuthNotice(null);
           setActiveTab((prev) => {
             if (res.profile.role === 'guru' || res.profile.role === 'siswa') {
-              return prev === 'loans' || prev === 'returns' ? prev : 'assets';
+              return prev === 'assets' ||
+                prev === 'loans' ||
+                prev === 'returns' ||
+                prev === 'schedules'
+                ? prev
+                : 'overview';
             }
             return prev;
           });
@@ -225,7 +236,47 @@ export function App() {
     setData(snapshot);
   }, [profileUid, isAdmin]);
 
+  const myScheduleConflicts = React.useMemo(
+    () => (profileUid ? getUserScheduleConflictNotifications(data.schedules, profileUid) : []),
+    [data.schedules, profileUid]
+  );
+
+  useEffect(() => {
+    notifiedConflictKeysRef.current.clear();
+    setNotifOpen(false);
+  }, [profileUid]);
+
+  useEffect(() => {
+    if (!profileUid || myScheduleConflicts.length === 0) return;
+    const newlyDetected = myScheduleConflicts.filter(
+      (item) => !notifiedConflictKeysRef.current.has(item.key)
+    );
+    if (newlyDetected.length === 0) return;
+    for (const item of newlyDetected) {
+      notifiedConflictKeysRef.current.add(item.key);
+    }
+    const first = newlyDetected[0];
+    const other = first.conflictsWith[0];
+    notify(
+      `Notif Bentrok Jadwal: Pengajuan Ruang ${first.schedule.venue} (${first.schedule.date} ${first.schedule.startTime}–${first.schedule.endTime}) bentrok dengan "${other.activity}" (${other.startTime}–${other.endTime}).`,
+      'error'
+    );
+  }, [profileUid, myScheduleConflicts, notify]);
+
+  useEffect(() => {
+    if (!notifOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (notifContainerRef.current && !notifContainerRef.current.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [notifOpen]);
+
   const handleLogout = async () => {
+    notifiedConflictKeysRef.current.clear();
+    setNotifOpen(false);
     setProfile(null);
     setPrivateInfo(null);
     setOnboardingUser(null);
@@ -263,9 +314,7 @@ export function App() {
           setPrivateInfo(nextPrivate);
           setOnboardingUser(null);
           setAuthNotice(null);
-          setActiveTab(
-            nextProfile.role === 'guru' || nextProfile.role === 'siswa' ? 'assets' : 'overview'
-          );
+          setActiveTab('overview');
         }}
         onCancelOnboarding={() => {
           setOnboardingUser(null);
@@ -298,15 +347,30 @@ export function App() {
   const navGroups: { title: string; items: NavItem[] }[] = isGuruOrSiswa
     ? [
         {
+          title: 'RINGKASAN',
+          items: [{ key: 'overview', label: 'Dashboard', icon: LayoutGrid }],
+        },
+        {
           title: 'MANAJEMEN LAB',
           items: [
             { key: 'assets', label: 'Inventaris', icon: Monitor },
-            { key: 'loans', label: 'Peminjaman', icon: ArrowLeftRight },
+            {
+              key: 'loans',
+              label: 'Peminjaman',
+              icon: ArrowLeftRight,
+              count: pendingLoansCount > 0 ? pendingLoansCount : undefined,
+            },
             {
               key: 'returns',
               label: 'Pengembalian',
               icon: ScanBarcode,
               count: returnableLoansCount > 0 ? returnableLoansCount : undefined,
+            },
+            {
+              key: 'schedules',
+              label: 'Aula & Multimedia',
+              icon: CalendarDays,
+              count: pendingSchedulesCount > 0 ? pendingSchedulesCount : undefined,
             },
           ],
         },
@@ -334,7 +398,7 @@ export function App() {
             },
             {
               key: 'schedules',
-              label: 'Jadwal Lab',
+              label: 'Aula & Multimedia',
               icon: CalendarDays,
               count: pendingSchedulesCount > 0 ? pendingSchedulesCount : undefined,
             },
@@ -363,16 +427,28 @@ export function App() {
       ];
 
   const effectiveTab: TabKey =
-    isGuruOrSiswa && activeTab !== 'assets' && activeTab !== 'loans' && activeTab !== 'returns'
-      ? 'assets'
+    isGuruOrSiswa &&
+    activeTab !== 'overview' &&
+    activeTab !== 'assets' &&
+    activeTab !== 'loans' &&
+    activeTab !== 'returns' &&
+    activeTab !== 'schedules'
+      ? 'overview'
       : activeTab;
 
   const allItems = navGroups.flatMap((g) => g.items);
-  const currentTitle = allItems.find((i) => i.key === effectiveTab)?.label ?? 'Inventaris';
+  const currentTitle = allItems.find((i) => i.key === effectiveTab)?.label ?? 'Dashboard';
 
   const selectTab = (key: TabKey) => {
-    if (isGuruOrSiswa && key !== 'assets' && key !== 'loans' && key !== 'returns') {
-      setActiveTab('assets');
+    if (
+      isGuruOrSiswa &&
+      key !== 'overview' &&
+      key !== 'assets' &&
+      key !== 'loans' &&
+      key !== 'returns' &&
+      key !== 'schedules'
+    ) {
+      setActiveTab('overview');
     } else {
       setActiveTab(key);
     }
@@ -542,15 +618,90 @@ export function App() {
               <span>{formattedDate}</span>
             </div>
             <div className="flex items-center gap-2.5 mt-0.5">
+              <div className="relative" ref={notifContainerRef}>
+                <button
+                  type="button"
+                  onClick={() => setNotifOpen((prev) => !prev)}
+                  className={`relative p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                    myScheduleConflicts.length > 0
+                      ? 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
+                      : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                  }`}
+                  aria-label="Notifikasi bentrok jadwal"
+                  title="Notifikasi Penjadwalan"
+                >
+                  <Bell className="w-4 h-4" />
+                  {myScheduleConflicts.length > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-bold font-mono flex items-center justify-center">
+                      {myScheduleConflicts.length}
+                    </span>
+                  )}
+                </button>
+
+                {notifOpen && (
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl border border-slate-200 shadow-xl z-50 overflow-hidden text-left">
+                    <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                        Notifikasi Penjadwalan Anda
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        {myScheduleConflicts.length} bentrok
+                      </span>
+                    </div>
+                    {myScheduleConflicts.length === 0 ? (
+                      <div className="p-4 text-xs text-slate-500 text-center">
+                        Tidak ada pengajuan jadwal Anda yang bentrok waktu.
+                      </div>
+                    ) : (
+                      <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
+                        {myScheduleConflicts.map((item) => (
+                          <div key={item.key} className="p-3.5 space-y-1.5">
+                            <div className="flex items-start gap-2">
+                              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                              <div className="min-w-0 flex-1">
+                                <div className="text-xs font-bold text-rose-700">
+                                  Bentrok Waktu · Ruang {item.schedule.venue}
+                                </div>
+                                <div className="text-xs font-semibold text-slate-900 truncate mt-0.5">
+                                  {item.schedule.activity}
+                                </div>
+                                <div className="text-[11px] font-mono text-slate-600 mt-0.5">
+                                  {item.schedule.date} · {item.schedule.startTime}–{item.schedule.endTime} ({item.schedule.status})
+                                </div>
+                                <div className="text-[11px] text-rose-600 mt-1">
+                                  Bentrok dengan: {item.conflictsWith[0].activity} ({item.conflictsWith[0].startTime}–{item.conflictsWith[0].endTime}, oleh {item.conflictsWith[0].requesterName})
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50/50 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNotifOpen(false);
+                          selectTab('schedules');
+                        }}
+                        className="text-xs font-semibold text-[#2563eb] hover:text-[#1d4ed8] cursor-pointer"
+                      >
+                        Buka Aula & Multimedia
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {isGuruOrSiswa ? (
-                <span className="text-xs text-slate-600 truncate max-w-[180px] sm:max-w-none">
+                <span className="text-xs text-slate-600 truncate max-w-[140px] sm:max-w-none">
                   {profile.displayName} · {roleLabel}
                 </span>
               ) : (
                 <button
                   type="button"
                   onClick={() => selectTab('profile')}
-                  className="text-xs text-slate-600 hover:text-slate-900 transition-colors cursor-pointer truncate max-w-[180px] sm:max-w-none"
+                  className="text-xs text-slate-600 hover:text-slate-900 transition-colors cursor-pointer truncate max-w-[140px] sm:max-w-none"
                   title="Buka Profil Saya"
                 >
                   {profile.displayName} · {roleLabel}

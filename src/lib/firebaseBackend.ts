@@ -43,6 +43,7 @@ import {
   MAINTENANCE_STATUSES,
   PERSON_ROLES,
   SCHEDULE_STATUSES,
+  SCHEDULE_VENUES,
   type AppDataSnapshot,
   type Asset,
   type AssetCategory,
@@ -57,6 +58,7 @@ import {
   type MaintenanceStatus,
   type PersonRole,
   type ScheduleStatus,
+  type ScheduleVenue,
   type SystemRole,
   type UserInvite,
   type UserPrivateInfo,
@@ -75,6 +77,7 @@ const ALLOWED_ASSET_CATEGORIES = new Set<AssetCategory>(ASSET_CATEGORIES);
 const ALLOWED_ASSET_CONDITIONS = new Set<AssetCondition>(ASSET_CONDITIONS);
 const ALLOWED_LOAN_STATUSES = new Set<LoanStatus>(LOAN_STATUSES);
 const ALLOWED_SCHEDULE_STATUSES = new Set<ScheduleStatus>(SCHEDULE_STATUSES);
+const ALLOWED_SCHEDULE_VENUES = new Set<ScheduleVenue>(SCHEDULE_VENUES);
 const ALLOWED_MAINTENANCE_STATUSES = new Set<MaintenanceStatus>(MAINTENANCE_STATUSES);
 
 function clampStr(val: unknown, maxLen: number): string {
@@ -349,12 +352,24 @@ function mapAssetLockDoc(id: string, data: DocumentData): AssetLock {
 }
 
 function mapScheduleDoc(id: string, data: DocumentData): LabSchedule {
+  const date = String(data.date ?? '');
+  const rawEndDate = String(data.endDate ?? '');
   return {
     id,
-    date: String(data.date ?? ''),
+    venue: ALLOWED_SCHEDULE_VENUES.has(data.venue as ScheduleVenue)
+      ? (data.venue as ScheduleVenue)
+      : 'Aula',
+    date,
+    endDate: rawEndDate && rawEndDate >= date ? rawEndDate : date,
     startTime: String(data.startTime ?? ''),
     endTime: String(data.endTime ?? ''),
+    lessonPeriod: String(data.lessonPeriod ?? ''),
     activity: String(data.activity ?? ''),
+    setupType: String(data.setupType ?? ''),
+    participantCount: Math.max(0, Number(data.participantCount ?? 0) || 0),
+    equipmentNeeds: String(data.equipmentNeeds ?? ''),
+    notes: String(data.notes ?? ''),
+    adminNotes: String(data.adminNotes ?? ''),
     requesterId: String(data.requesterId ?? ''),
     requesterName: String(data.requesterName ?? ''),
     requesterRole: ALLOWED_PERSON_ROLES.has(data.requesterRole as PersonRole)
@@ -2004,14 +2019,24 @@ export async function handleFirebaseApiRequest<T>(
 
   // --- SCHEDULES ---
   if (path === '/api/schedules' && m === 'POST') {
+    const venue = String(body.venue || 'Aula') as ScheduleVenue;
     const date = clampStr(body.date, 20);
+    const rawEndDate = clampStr(body.endDate, 20);
+    const endDate = rawEndDate && rawEndDate >= date ? rawEndDate : date;
     const startTime = clampStr(body.startTime, 10);
     const endTime = clampStr(body.endTime, 10);
+    const lessonPeriod = clampStr(body.lessonPeriod, 40);
     const activity = clampStr(body.activity, 120);
+    const setupType = clampStr(body.setupType, 60);
+    const participantCount = Math.max(0, Math.min(2000, Number(body.participantCount) || 0));
+    const equipmentNeeds = clampStr(body.equipmentNeeds, 240);
+    const notes = clampStr(body.notes, 300);
     const requesterName = clampStr(body.requesterName, 80);
     const requesterRole = String(body.requesterRole || 'Guru') as PersonRole;
     const unit = clampStr(body.unit, 60);
+
     if (
+      !ALLOWED_SCHEDULE_VENUES.has(venue) ||
       !date ||
       !startTime ||
       !endTime ||
@@ -2020,14 +2045,69 @@ export async function handleFirebaseApiRequest<T>(
       !unit ||
       !ALLOWED_PERSON_ROLES.has(requesterRole)
     ) {
-      throw new Error('Data jadwal belum lengkap.');
+      throw new Error('Data jadwal peminjaman ruangan belum lengkap.');
     }
+
+    const rawSeries = Array.isArray(body.recurrenceDates) ? body.recurrenceDates : [];
+    const seriesItems = rawSeries
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const rec = item as Record<string, unknown>;
+        const d = clampStr(rec.date, 20);
+        const ed = clampStr(rec.endDate, 20);
+        if (!d) return null;
+        return { date: d, endDate: ed && ed >= d ? ed : d };
+      })
+      .filter((x): x is { date: string; endDate: string } => x !== null)
+      .slice(0, 12);
+
     try {
+      if (seriesItems.length > 1) {
+        const batch = writeBatch(db);
+        let firstId = '';
+        for (const slot of seriesItems) {
+          const docRef = doc(collection(db, 'schedules'));
+          if (!firstId) firstId = docRef.id;
+          batch.set(docRef, {
+            venue,
+            date: slot.date,
+            endDate: slot.endDate,
+            startTime,
+            endTime,
+            lessonPeriod,
+            activity,
+            setupType,
+            participantCount,
+            equipmentNeeds,
+            notes,
+            adminNotes: '',
+            requesterId: uid,
+            requesterName,
+            requesterRole,
+            unit,
+            status: 'Menunggu',
+            labScope: 'smkn1sambeng',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
+        return { id: firstId, count: seriesItems.length } as T;
+      }
+
       const ref = await addDoc(collection(db, 'schedules'), {
+        venue,
         date,
+        endDate,
         startTime,
         endTime,
+        lessonPeriod,
         activity,
+        setupType,
+        participantCount,
+        equipmentNeeds,
+        notes,
+        adminNotes: '',
         requesterId: uid,
         requesterName,
         requesterRole,
@@ -2037,7 +2117,7 @@ export async function handleFirebaseApiRequest<T>(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      return { id: ref.id } as T;
+      return { id: ref.id, count: 1 } as T;
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'schedules');
     }
@@ -2054,17 +2134,61 @@ export async function handleFirebaseApiRequest<T>(
     }
     if (!existingSnap.exists()) throw new Error('Jadwal tidak ditemukan.');
     const existing = existingSnap.data();
+    const existingVenue = ALLOWED_SCHEDULE_VENUES.has(existing.venue as ScheduleVenue)
+      ? (existing.venue as ScheduleVenue)
+      : 'Aula';
+    const nextVenue =
+      body.venue !== undefined ? (String(body.venue) as ScheduleVenue) : existingVenue;
+    if (!ALLOWED_SCHEDULE_VENUES.has(nextVenue)) {
+      throw new Error('Pilihan ruangan tidak valid (harus Aula atau Multimedia).');
+    }
+
+    const nextDate = clampStr(body.date, 20) || String(existing.date);
+    const rawNextEndDate =
+      body.endDate !== undefined ? clampStr(body.endDate, 20) : String(existing.endDate || '');
+    const nextEndDate = rawNextEndDate && rawNextEndDate >= nextDate ? rawNextEndDate : nextDate;
+
+    const nextLessonPeriod =
+      body.lessonPeriod !== undefined
+        ? clampStr(body.lessonPeriod, 40)
+        : String(existing.lessonPeriod || '');
+    const nextSetupType =
+      body.setupType !== undefined
+        ? clampStr(body.setupType, 60)
+        : String(existing.setupType || '');
+    const nextParticipantCount =
+      body.participantCount !== undefined
+        ? Math.max(0, Math.min(2000, Number(body.participantCount) || 0))
+        : Math.max(0, Number(existing.participantCount || 0) || 0);
+    const nextEquipmentNeeds =
+      body.equipmentNeeds !== undefined
+        ? clampStr(body.equipmentNeeds, 240)
+        : String(existing.equipmentNeeds || '');
+    const nextNotes =
+      body.notes !== undefined ? clampStr(body.notes, 300) : String(existing.notes || '');
 
     let updatePayload: Record<string, unknown>;
     if (isAdmin) {
       const status = String(body.status || existing.status) as ScheduleStatus;
       if (!ALLOWED_SCHEDULE_STATUSES.has(status)) throw new Error('Status jadwal tidak valid.');
+      const nextAdminNotes =
+        body.adminNotes !== undefined
+          ? clampStr(body.adminNotes, 300)
+          : String(existing.adminNotes || '');
       updatePayload = {
+        venue: nextVenue,
         status,
-        date: clampStr(body.date, 20) || String(existing.date),
+        date: nextDate,
+        endDate: nextEndDate,
         startTime: clampStr(body.startTime, 10) || String(existing.startTime),
         endTime: clampStr(body.endTime, 10) || String(existing.endTime),
+        lessonPeriod: nextLessonPeriod,
         activity: clampStr(body.activity, 120) || String(existing.activity),
+        setupType: nextSetupType,
+        participantCount: nextParticipantCount,
+        equipmentNeeds: nextEquipmentNeeds,
+        notes: nextNotes,
+        adminNotes: nextAdminNotes,
         unit: clampStr(body.unit, 60) || String(existing.unit),
         updatedAt: serverTimestamp(),
       };
@@ -2076,10 +2200,17 @@ export async function handleFirebaseApiRequest<T>(
         throw new Error('Jadwal yang sudah diproses tidak dapat diubah.');
       }
       updatePayload = {
-        date: clampStr(body.date, 20) || String(existing.date),
+        venue: nextVenue,
+        date: nextDate,
+        endDate: nextEndDate,
         startTime: clampStr(body.startTime, 10) || String(existing.startTime),
         endTime: clampStr(body.endTime, 10) || String(existing.endTime),
+        lessonPeriod: nextLessonPeriod,
         activity: clampStr(body.activity, 120) || String(existing.activity),
+        setupType: nextSetupType,
+        participantCount: nextParticipantCount,
+        equipmentNeeds: nextEquipmentNeeds,
+        notes: nextNotes,
         unit: clampStr(body.unit, 60) || String(existing.unit),
         updatedAt: serverTimestamp(),
       };
